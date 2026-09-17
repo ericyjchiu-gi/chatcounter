@@ -1,0 +1,27 @@
+{
+  "version": "1.7.0",
+  "passed": 19,
+  "environment": "Chromium / mocked extension storage + ChatGPT HTTP; simulated Web Locks",
+  "orion_device_test": false,
+  "checks": [
+    "Initial open: no history request, 24h selected, unified Sync & History expanded",
+    "24h \u2192 7d \u2192 30d stages finish; widening coverage reads older pages beyond cached IDs",
+    "Healthy completed baseline collapses automatically; chart and cache remain visible",
+    "Panel reopen and new tab share saved baseline status without starting a scan",
+    "Unchanged conversations: headers reconciled; zero extra message-detail fetches",
+    "Passive completed reply capture persists metadata and deduplicates the same message ID",
+    "429: one actual error, unrequested tasks remain pending/deferred, shared Retry-After cannot be bypassed",
+    "After cooldown: resumes saved failed/pending tasks without deleting prior records",
+    "Explicit Pause persists across scheduler ticks; no automatic restart",
+    "Second tab sees shared in-progress state and cannot obtain the active native scan lock",
+    "Rebuild in a second tab cannot reset jobs while another scanner owns the lock",
+    "Closing worker tab releases native lock; another active tab resumes durable jobs",
+    "Unknown list response blocks baseline instead of treating it as empty/complete",
+    "Failed/ignored persistence cannot start an unverified history scan",
+    "Promise-only WebExtension storage supports the same build as callback-only storage",
+    "Partial v1.6 cache migrates as saved data awaiting Resume, never as a fresh empty baseline",
+    "503 is retryable; repeated 404 is unavailable and remains an explicit coverage gap",
+    "Concurrent writes from two tabs are serialized without lost updates",
+    "Account switch selects an isolated cache and updates detected plan rather than assuming Pro"
+  ]
+}

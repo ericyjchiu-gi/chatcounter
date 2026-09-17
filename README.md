@@ -1,116 +1,76 @@
-# ChatGPT Message Meter
+# ChatCounter 1.7.0 — Universal
 
-Current development version: **v1.6.0**
+One source tree and one flat ZIP for Chrome and Orion. This build targets the common capabilities used successfully by the earlier Orion build; it is not a claim that every Chrome/Orion version has identical extension support.
 
-A Chrome/Chromium extension that reconstructs ChatGPT usage from account conversation history, captures new browser messages as events, and keeps a persistent local metadata cache for quota-safety analytics.
+## Install or update
 
-## What v1.6 changes
+**Orion:** install the flat ZIP using file-based extension installation. `manifest.json` is at the ZIP root.
 
-v1.6 moves the extension from a history-scanner-first design to an **event collector + reconciliation** design:
+**Chrome:** extract the ZIP to a fixed directory, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked**. For later updates replace files in that same directory, then choose **Reload**.
 
-- Live ChatGPT Web completions are captured opportunistically with **zero extra history requests**.
-- All ChatGPT tabs in the Chrome profile share one **background sync coordinator / lock**.
-- Reconciliation is incremental:
-  - list conversations newest-first;
-  - stop once the list is older than the last successful reconciliation;
-  - fetch only new/changed conversations;
-  - within a changed conversation, read newest messages first and stop once a cached message ID is encountered.
-- Opening the Meter does **not** automatically build history.
-- First history build is explicit through **Build initial cache**.
-- Background reconciliation is optional and defaults to on; it runs approximately every 30 minutes while a ChatGPT tab is open, but only after an initial history build exists.
-- **Reconcile when Meter opens** is a separate setting and defaults to off.
+Prefer an in-place update and keep only one version enabled. Refresh existing ChatGPT tabs after updating. Removing an extension or changing its identity may remove/separate its local cache. Do not clear ChatGPT website data or paste an auth token anywhere.
 
-See [`RELEASE_NOTES_1.5_TO_1.6.md`](RELEASE_NOTES_1.5_TO_1.6.md) for the full migration notes.
+Open **Meter**. A new installation shows **Build history baseline**. An imported partial v1.6 cache shows **Resume**; saved records are reused, but missing coverage proofs must be verified.
 
-## Current features
+## Sync & History
 
-- Persistent `chrome.storage.local` metadata cache
-- Separate live-event ledger, de-duplicated by `message_id`
-- Multi-tab coordinator in an MV3 background service worker
-- Cross-tab single-flight reconciliation
-- Live browser message capture
-- Incremental cross-device reconciliation
-- Conservative pacing and retry/backoff for `429` / `5xx`
-- 24 hour / 7 day / 30 day trend dashboard
-- Dashboard model families:
-  - GPT-5.6
-  - GPT-5.6 Pro
-  - GPT-6 Pro
-- Raw model slug + reasoning effort detail table
-- Account-plan detection (`pro`, `prolite`, `plus`, Business, Enterprise, Edu, etc.)
-- Plan-aware quota safety logic where public caps are sufficiently reliable
-- Optional manual Chat reset anchor, explicitly treated as an assumption unless ChatGPT exposes the real reset
-- Account-scoped cache
-- Up to 90 days of message metadata retained locally, with a 45-day storage-pressure fallback
+All history, sync, heartbeat, queue, error and acquisition settings live in one expandable region.
 
-## Sync model
+- Expanded for first use, a partial baseline, pause, or a new error.
+- Automatically collapsed after the 24h / 7d / 30d historical stages finish with no outstanding issue.
+- A deliberate expand/collapse is retained for the current panel session. A new error reopens it.
+- Default analytical range: **24 HOURS**. The chart groups GPT-5.6 / GPT-5.6 Pro / GPT-6 Pro. Raw model and effort remain in the table.
+- Opening the panel does not start a history scan by default. A lightweight account/session check still happens. Separately, an already-authorized baseline or due automatic reconciliation may run in an active tab.
 
-### Opening the dashboard
+Worker heartbeat and local listener heartbeat are different from server reconciliation. Neither heartbeat is an HTTP request to ChatGPT. When no scan is running the worker is correctly shown as **Idle**, rather than inventing a continuously running scanner.
 
-Opening the Meter reads local storage only. It does not enumerate ChatGPT conversations.
+## Acquisition engine
 
-A lightweight `/api/auth/session` refresh may run to confirm the current ChatGPT account and plan, but this is not a history scan.
+The initial build is staged: **24 hours → 7 days → 30 days**. Targets share a fixed snapshot anchor. A stage is indexed only after its discovery sources and all discovered conversation tasks finish without unresolved gaps. The UI shows processed/discovered task counts, not a fabricated percentage of total messages.
 
-### Live capture
+Progress is durable after every successful discovery page and message page. Jobs retain pagination cursors, known conversation update timestamps, and coverage intervals. Replies are deduplicated by message ID. Partial results are merged rather than replacing a successful cache with an incomplete refresh.
 
-When ChatGPT Web completes an assistant turn in this browser, the extension observes the existing ChatGPT response stream and records only:
+A conversation is skipped only if **both** its update timestamp is unchanged **and** its verified coverage contains the requested range. Widening 24h to 7d/30d may need older pages even when no new chat was posted. Where available an older-page continuation is reused. All metadata from an already downloaded page is reused within the retention window.
 
-- message ID
-- timestamp
-- model slug
-- reasoning/thinking effort
+Recent-device reconciliation takes priority over older backfill at a page boundary. Its watermark advances to the start of a successful pass, not the end, so changes during the pass can be rediscovered. Failed passes do not advance it. Explicit **Rebuild history** rechecks coverage but retains saved events.
 
-No chat text is stored.
+## Multiple tabs and recovery
 
-Live capture is opportunistic. If OpenAI changes the response transport or a completion is not observable, normal reconciliation remains the fallback.
+- Browser-native Web Locks provide account-scoped scanner exclusion and separate serialized store transactions. There is no background-worker/tab-ID lock in the correctness path.
+- Baseline state, cursors, errors, cooldown and pause are shared through extension local storage.
+- An active worker publishes an advisory heartbeat approximately every 10 seconds, with a 45-second stale threshold.
+- Hiding/navigating the worker page aborts its next request and releases the lock after cleanup. Destruction of the browser context releases its native locks.
+- Another eligible active tab can resume a started baseline from saved work. A stale heartbeat **never** authorizes stealing a native lock held by a living page.
+- If iPadOS suspends every page, nothing executes. Resume requires an active authenticated page. Scheduling is best effort, not a guaranteed background service.
 
-### Reconciliation
+## Error handling
 
-Reconciliation exists primarily to pick up activity from other devices/apps and any browser events missed by live capture.
+HTTP 429 persists an account-wide `Retry-After` cooldown and stops additional requests. The rejected task is an actual error; tasks never requested remain **pending/deferred**. Retry controls cannot bypass this cooldown. 5xx/network errors receive delayed exponential retry; repeated 404/403 become unavailable gaps. Schema/cursor/safety-cap errors stop or flag incomplete work rather than claiming completion. Auth/account changes and storage failures are explicit errors.
 
-After the first build, a normal reconciliation starts from the last successful reconciliation time (with a small overlap), scans conversation lists newest-first, and stops when it reaches older entries. Only changed/new conversations are fetched.
+The error ledger stores stage, conversation/source identifier, code, HTTP status, attempts, last attempt, and next eligible retry. Raw response bodies, chat text, tokens and headers are not logged or exported.
 
-For changed conversations, message retrieval starts from the newest page and stops once a previously cached message ID is encountered.
+## Storage and privacy
 
-### Multiple ChatGPT tabs
+Uses callback- or Promise-compatible `storage.local`, verified with a disposable write/read probe before scanning. No service worker, `tabs`, `alarms`, `storage.session`, remote libraries, or telemetry is required. The only extension permission is `storage`, scoped for injection to `https://chatgpt.com/*`.
 
-Every ChatGPT tab can act as a live sensor, but only one tab can own the Chrome-profile reconciliation lock at a time. The lock is coordinated by `background.js`.
+Tokens remain inside the API module's memory and are returned only to ChatGPT. Cached data is metadata: message IDs, timestamps, model/effort, conversation IDs, coverage, queue and diagnostic state. Account and user identifiers are hashed into the new storage scope. Legacy v1.6 data is imported without deleting the old copy; its coverage is deliberately treated as unverified.
 
-Closing the Meter panel does not cancel a reconciliation already running in that tab. Reloading/closing the owning browser tab releases the shared lock; already-persisted cache progress remains available.
+Retention is 90 days; a storage-quota error triggers a 45-day retry while keeping the latest 30 days. If storage is still full, the write fails visibly. No valid recent records are silently dropped to make a scan appear successful.
 
-## Install
+## Quota interpretation
 
-1. Clone or download this repository.
-2. Open `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the repository folder.
-6. Refresh `https://chatgpt.com`.
-7. Click the **Meter** pill at the bottom-right.
+This is a ledger of observed **saved replies**, not the official usage ledger. Deleted/temporary chats, incomplete generations, missing metadata, branches and private-endpoint differences may affect counts. **Even an indexed history is not proof of exact remaining quota.** The UI therefore never says “guaranteed remaining”.
 
-When upgrading an existing unpacked install, replace the files in the same extension folder and click **Reload** in `chrome://extensions`. Existing v1.4/v1.5 history cache keys are intentionally retained and migrated in place.
+Plan labels and numeric references preserve the existing v1.6 presets. They are labeled references, not freshly verified or server-reported entitlements. Generic Business/Enterprise/Edu/unknown plans do not receive a guessed personal Pro cap. The manual reset remains an assumption, not a copied Codex reset.
 
-## Default sync settings
+## Tests and package
 
-- **Capture live messages:** On
-- **Background reconciliation:** On
-- **Reconcile when Meter opens:** Off
-- **Initial history build:** Manual
+`python tests/browser_regression.py` runs offline Chromium integration checks (requires Python Playwright and Chromium). DOM interactions run in a real browser; ChatGPT HTTP, extension storage and Web Locks are simulated. The test fixture uses an accelerated clock for request pacing. `tests/RESULTS.json` records the executed checks. These are **not Orion/iPad device tests**.
 
-The background reconciler does nothing until an initial history build has completed.
+`python tools/package.py` validates the manifest and JavaScript, then builds a reproducible flat ZIP in `dist/` plus per-file SHA-256 hashes. The GitHub workflow packages committed source directly; it does not assemble source from encoded chunks.
 
-## Security model
+## Platform references
 
-The extension reads ChatGPT's web `accessToken` from `/api/auth/session` into page memory because current private history endpoints require bearer authentication.
-
-The token is never displayed, exported, logged, or written to extension storage. It is sent only back to `chatgpt.com` for authenticated requests.
-
-Persistent storage contains metadata only. Chat content is not cached.
-
-## Important limitation
-
-This is a reconstruction from server-side conversation history plus opportunistic live events, **not OpenAI's official quota ledger**.
-
-Temporary/deleted chats, failed generations, server-side quota events absent from conversation history, or changes to ChatGPT's private web APIs can create discrepancies.
-
-Rolling-window “guaranteed remaining” figures are conservative only to the extent that the reconstructed message history is complete and the applicable quota window assumptions are correct.
+- Chrome storage API: https://developer.chrome.com/docs/extensions/reference/api/storage
+- Web Locks: https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API
+- Orion iOS/iPadOS extension status: https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html

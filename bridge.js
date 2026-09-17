@@ -1,60 +1,37 @@
+/* Isolated-world storage adapter: callback and Promise APIs, never a token bridge. */
 (() => {
   'use strict';
-  const {api,call,error} = globalThis.CMMExt163;
-  const PAGE='CMM_PAGE_V163', EXT='CMM_EXT_V163';
-  const allowed = key => typeof key === 'string' && /^(cmm_v14_|cmm_v16_)/.test(key);
-  const replyEvent = (event,payload={}) => window.postMessage({source:EXT,type:'event',event,payload},location.origin);
-  if (api?.runtime?.onMessage?.addListener) api.runtime.onMessage.addListener(msg => {
-    if (msg?.type === 'CMM_BG_EVENT_163') replyEvent(msg.event,msg.payload);
-  });
-  if (api?.storage?.onChanged?.addListener) api.storage.onChanged.addListener((changes,area) => {
-    if (area === 'local' && Object.keys(changes || {}).some(allowed)) replyEvent('cache-updated');
-  });
-  const filteredKeys = keys => {
-    if (keys == null) return null;
-    const arr=(Array.isArray(keys)?keys:[keys]).filter(allowed);
-    if (!arr.length) throw error('STORAGE_KEYS_INVALID','No allowed cache keys requested.');
-    return arr;
-  };
-  async function get(keys) {
-    const value=await call(api?.storage?.local,'get',[keys]);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw error('STORAGE_INVALID_RESPONSE','Extension storage returned no data object; this is not an empty cache.');
-    return Object.fromEntries(Object.entries(value).filter(([k])=>allowed(k)));
-  }
-  window.addEventListener('message', async event => {
-    if (event.source !== window || event.origin !== location.origin) return;
-    const msg=event.data;
-    if (msg?.source !== PAGE || !msg.id) return;
-    const reply=(ok,result,err)=>window.postMessage({source:EXT,id:msg.id,ok,result,error:err?.message,code:err?.code},location.origin);
-    try {
-      const p=msg.payload || {};
-      switch(msg.op) {
-        case 'get': reply(true,await get(filteredKeys(p.keys))); break;
-        case 'set': {
-          const items=Object.fromEntries(Object.entries(p.items || {}).filter(([k])=>allowed(k)));
-          await call(api?.storage?.local,'set',[items]); reply(true,true); break;
-        }
-        case 'remove': await call(api?.storage?.local,'remove',[filteredKeys(p.keys) || []]); reply(true,true); break;
-        case 'bytes': reply(true,await call(api?.storage?.local,'getBytesInUse',[filteredKeys(p.keys)])); break;
-        case 'probe-storage': {
-          const key=`cmm_v16_probe_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-          const nonce=Math.random().toString(36).slice(2);
-          try {
-            await call(api?.storage?.local,'set',[{[key]:nonce}]);
-            const read=await get([key]);
-            if (read[key]!==nonce) throw error('STORAGE_READBACK_FAILED','Cache write/read verification failed. History scan was not started.');
-            reply(true,{verified:true,backend:'extension.storage.local'});
-          } finally { await call(api?.storage?.local,'remove',[[key]]).catch(()=>{}); }
-          break;
-        }
-        case 'bg': {
-          const result=await call(api?.runtime,'sendMessage',[{type:'CMM_PAGE_BG_163',action:String(p.action || ''),payload:p.payload || {}}]);
-          if (!result || typeof result!=='object') throw error('BACKGROUND_EMPTY_RESPONSE','Background returned no response; not a confirmed busy sync.');
-          if (result.error) throw error('BACKGROUND_ERROR',result.error);
-          reply(true,result); break;
-        }
-        default: throw error('BRIDGE_OP_INVALID','Unsupported extension bridge operation.');
-      }
-    } catch(e) { reply(false,null,e); }
+  const chromeAPI=!!globalThis.chrome?.storage?.local,api=chromeAPI?globalThis.chrome:globalThis.browser;
+  const allowed=k=>typeof k==='string'&&/^cmm_v(14|16|17)_/.test(k);
+  const fail=(code,message)=>Object.assign(new Error(message),{code});
+  function call(method,args){return new Promise((resolve,reject)=>{
+    let settled=false;const done=(err,value)=>{if(settled)return;settled=true;clearTimeout(timer);err?reject(err):resolve(value);};
+    const timer=setTimeout(()=>done(fail('STORAGE_TIMEOUT',method+' did not complete.')),7500);
+    try{
+      const target=api?.storage?.local;if(typeof target?.[method]!=='function')throw fail('STORAGE_UNAVAILABLE','Storage API missing: '+method);
+      const cb=value=>done(api.runtime?.lastError?fail('STORAGE_ERROR',api.runtime.lastError.message):null,value);
+      const ret=chromeAPI?target[method](...args,cb):target[method](...args);
+      if(ret?.then)ret.then(v=>done(null,v),e=>done(fail('STORAGE_ERROR',e.message||'Storage rejected.')));
+      else if(!chromeAPI)done(fail('STORAGE_INVALID_RESPONSE','Expected a Promise.'));
+    }catch(e){done(e);}
+  });}
+  api?.storage?.onChanged?.addListener((changes,area)=>{if(area==='local'&&Object.keys(changes).some(allowed))window.postMessage({source:'CMM_EXT_V17',event:'changed'},location.origin);});
+  window.addEventListener('message',async event=>{
+    const m=event.data;if(event.source!==window||event.origin!==location.origin||m?.source!=='CMM_PAGE_V17'||!m.id)return;
+    const p=m.payload||{};let result;
+    try{
+      if(m.op==='get'){
+        if(!Array.isArray(p.keys)||!p.keys.length||!p.keys.every(allowed))throw fail('STORAGE_KEYS_INVALID','Invalid keys.');
+        result=await call('get',[p.keys]);if(!result||typeof result!=='object'||Array.isArray(result))throw fail('STORAGE_INVALID_RESPONSE','Missing storage object is not an empty cache.');
+      }else if(m.op==='set'){
+        if(!p.items||!Object.keys(p.items).length||!Object.keys(p.items).every(allowed))throw fail('STORAGE_KEYS_INVALID','Invalid keys.');
+        await call('set',[p.items]);result=true;
+      }else if(m.op==='probe'){
+        const k='cmm_v17_probe_'+crypto.randomUUID(),v=crypto.randomUUID();
+        try{await call('set',[{[k]:v}]);const got=await call('get',[[k]]);if(got?.[k]!==v)throw fail('STORAGE_READBACK_FAILED','Local cache write/read verification failed.');result=true;}
+        finally{await call('remove',[[k]]).catch(()=>{});}
+      }else throw fail('BRIDGE_OP_INVALID','Unsupported operation.');
+      window.postMessage({source:'CMM_EXT_V17',id:m.id,ok:true,result},location.origin);
+    }catch(e){window.postMessage({source:'CMM_EXT_V17',id:m.id,ok:false,code:e.code||'STORAGE_ERROR',error:e.message},location.origin);}
   });
 })();

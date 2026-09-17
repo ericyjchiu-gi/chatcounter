@@ -1,0 +1,29 @@
+name: Validate and package
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate JavaScript and package committed source
+        run: python3 tools/package.py
+      - name: Tag this packaged version without overwriting a tag
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          if ! git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            git tag "v${VERSION}"
+            git push origin "refs/tags/v${VERSION}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chatcounter-universal
+          path: dist/*.zip
