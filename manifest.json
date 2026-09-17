@@ -1,14 +1,19 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
-  "version": "1.5.0",
-  "description": "Cached ChatGPT usage analytics with account-plan detection, plan-aware quota safety logic, and single-flight incremental sync.",
+  "version": "1.6.0",
+  "description": "Event-driven ChatGPT usage analytics with live capture, multi-tab coordination, incremental reconciliation, plan-aware quota safety, and local history cache.",
   "permissions": [
-    "storage"
+    "storage",
+    "alarms",
+    "tabs"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -24,10 +29,9 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "meter.js",
-        "plan-aware-v15.js"
+        "meter.js"
       ],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "world": "MAIN"
     }
   ]
