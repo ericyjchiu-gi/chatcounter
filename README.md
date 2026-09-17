@@ -1,52 +1,82 @@
 # ChatGPT Message Meter
 
-Current development version: **v1.5.0**
+Current development version: **v1.6.0**
 
-A Chrome/Chromium extension that reconstructs **ChatGPT Chat** usage from account conversation history, keeps a persistent local metadata cache, and applies conservative plan-aware quota logic where the account tier can be identified safely.
+A Chrome/Chromium extension that reconstructs ChatGPT usage from account conversation history, captures new browser messages as events, and keeps a persistent local metadata cache for quota-safety analytics.
+
+## What v1.6 changes
+
+v1.6 moves the extension from a history-scanner-first design to an **event collector + reconciliation** design:
+
+- Live ChatGPT Web completions are captured opportunistically with **zero extra history requests**.
+- All ChatGPT tabs in the Chrome profile share one **background sync coordinator / lock**.
+- Reconciliation is incremental:
+  - list conversations newest-first;
+  - stop once the list is older than the last successful reconciliation;
+  - fetch only new/changed conversations;
+  - within a changed conversation, read newest messages first and stop once a cached message ID is encountered.
+- Opening the Meter does **not** automatically build history.
+- First history build is explicit through **Build initial cache**.
+- Background reconciliation is optional and defaults to on; it runs approximately every 30 minutes while a ChatGPT tab is open, but only after an initial history build exists.
+- **Reconcile when Meter opens** is a separate setting and defaults to off.
+
+See [`RELEASE_NOTES_1.5_TO_1.6.md`](RELEASE_NOTES_1.5_TO_1.6.md) for the full migration notes.
 
 ## Current features
 
-- Persistent `chrome.storage.local` cache
-- Incremental sync based on conversation `update_time`
-- **Single-flight sync**: closing/reopening the Meter panel does not start a second scan while one is already running
-- An in-progress sync continues after the panel is closed; reopening the panel attaches to the same page-level sync job
-- 15-minute automatic refresh cooldown after a completed sync
+- Persistent `chrome.storage.local` metadata cache
+- Separate live-event ledger, de-duplicated by `message_id`
+- Multi-tab coordinator in an MV3 background service worker
+- Cross-tab single-flight reconciliation
+- Live browser message capture
+- Incremental cross-device reconciliation
 - Conservative pacing and retry/backoff for `429` / `5xx`
-- 24 hour / 7 day / 30 day trend dashboard; 24 hours is the default
+- 24 hour / 7 day / 30 day trend dashboard
 - Dashboard model families:
   - GPT-5.6
   - GPT-5.6 Pro
   - GPT-6 Pro
 - Raw model slug + reasoning effort detail table
+- Account-plan detection (`pro`, `prolite`, `plus`, Business, Enterprise, Edu, etc.)
+- Plan-aware quota safety logic where public caps are sufficiently reliable
+- Optional manual Chat reset anchor, explicitly treated as an assumption unless ChatGPT exposes the real reset
 - Account-scoped cache
-- Up to 90 days of message metadata retained locally, with a 45-day quota fallback
+- Up to 90 days of message metadata retained locally, with a 45-day storage-pressure fallback
 
-## Account-plan detection
+## Sync model
 
-The extension detects the current ChatGPT account plan from `/api/auth/session` fields and, when necessary, the access token's `https://api.openai.com/auth.chatgpt_plan_type` claim. The detected plan is cached per account scope so the UI can render it immediately on reopen.
+### Opening the dashboard
 
-Known backend plan slugs include `free`, `go`, `plus`, `prolite`, `pro`, Business variants, Enterprise variants, and Edu variants. Unknown/new slugs remain analytics-only rather than receiving a guessed quota.
+Opening the Meter reads local storage only. It does not enumerate ChatGPT conversations.
 
-### Plan-aware Chat quota rules currently implemented
+A lightweight `/api/auth/session` refresh may run to confirm the current ChatGPT account and plan, but this is not a history scan.
 
-These rules apply **only to Chat**, not Codex/Work:
+### Live capture
 
-- **Pro 20x (`pro`)**
-  - GPT-6 Pro: 200/week
-  - GPT-5.6 Pro: 170/day
-  - GPT-6 Pro + GPT-5.6 Pro combined: 200/day
-- **Pro 5x (`prolite`)**
-  - GPT-6 Pro + GPT-5.6 Pro share 50/week
-- **Business Premium**
-  - Shared Pro bucket: 50/week, but only when an explicit Premium seat signal is detected
-- **Business Standard**
-  - Shared Pro bucket: 15/month, but only when an explicit Standard seat signal is detected
-- **Free / Go / Plus / Enterprise / Edu / unknown Business seat**
-  - Analytics are shown, but no numeric cap is guessed unless a safe rule is available
+When ChatGPT Web completes an assistant turn in this browser, the extension observes the existing ChatGPT response stream and records only:
 
-Because Chat reset anchors are not always exposed, weekly/daily quota displays use rolling windows as conservative usage upper bounds. Therefore the displayed `guaranteed remaining ≥ X` is a lower bound on remaining quota when the history reconstruction is complete.
+- message ID
+- timestamp
+- model slug
+- reasoning/thinking effort
 
-An optional weekly reset anchor can still be entered in Settings for comparison. It is explicitly treated as an assumption unless ChatGPT exposes a real Chat reset timestamp.
+No chat text is stored.
+
+Live capture is opportunistic. If OpenAI changes the response transport or a completion is not observable, normal reconciliation remains the fallback.
+
+### Reconciliation
+
+Reconciliation exists primarily to pick up activity from other devices/apps and any browser events missed by live capture.
+
+After the first build, a normal reconciliation starts from the last successful reconciliation time (with a small overlap), scans conversation lists newest-first, and stops when it reaches older entries. Only changed/new conversations are fetched.
+
+For changed conversations, message retrieval starts from the newest page and stops once a previously cached message ID is encountered.
+
+### Multiple ChatGPT tabs
+
+Every ChatGPT tab can act as a live sensor, but only one tab can own the Chrome-profile reconciliation lock at a time. The lock is coordinated by `background.js`.
+
+Closing the Meter panel does not cancel a reconciliation already running in that tab. Reloading/closing the owning browser tab releases the shared lock; already-persisted cache progress remains available.
 
 ## Install
 
@@ -58,34 +88,29 @@ An optional weekly reset anchor can still be entered in Settings for comparison.
 6. Refresh `https://chatgpt.com`.
 7. Click the **Meter** pill at the bottom-right.
 
-For future updates, keep using the same unpacked-extension folder and click **Reload** in `chrome://extensions`; this preserves the extension ID and local cache.
+When upgrading an existing unpacked install, replace the files in the same extension folder and click **Reload** in `chrome://extensions`. Existing v1.4/v1.5 history cache keys are intentionally retained and migrated in place.
+
+## Default sync settings
+
+- **Capture live messages:** On
+- **Background reconciliation:** On
+- **Reconcile when Meter opens:** Off
+- **Initial history build:** Manual
+
+The background reconciler does nothing until an initial history build has completed.
 
 ## Security model
 
-The extension reads ChatGPT's web `accessToken` from `/api/auth/session` into JavaScript memory because current private history endpoints require bearer authentication. The token is never displayed, exported, logged, written to `chrome.storage`, or sent anywhere other than `chatgpt.com`.
+The extension reads ChatGPT's web `accessToken` from `/api/auth/session` into page memory because current private history endpoints require bearer authentication.
 
-The persistent cache stores only:
+The token is never displayed, exported, logged, or written to extension storage. It is sent only back to `chatgpt.com` for authenticated requests.
 
-- message ID
-- timestamp
-- raw model slug
-- reasoning/thinking effort
-- conversation update timestamp/source
-- detected account plan metadata
-
-No chat text is cached.
+Persistent storage contains metadata only. Chat content is not cached.
 
 ## Important limitation
 
-This is a reconstruction from server-side conversation history, **not OpenAI's official quota ledger**. Temporary/deleted chats, failed generations, hidden quota-bearing events, or private endpoint changes can create discrepancies.
+This is a reconstruction from server-side conversation history plus opportunistic live events, **not OpenAI's official quota ledger**.
 
-The single-flight protection is page-level: closing/reopening the Meter panel on the same ChatGPT page reuses the active job. A full browser-tab reload destroys the page context, so a still-running job cannot survive that reload; cached data remains available and the next sync reconciles from server history.
+Temporary/deleted chats, failed generations, server-side quota events absent from conversation history, or changes to ChatGPT's private web APIs can create discrepancies.
 
-## v1.5.0
-
-- Retains the v1.4.1 session/panel reload fix: closing and reopening the Meter does not launch a second sync.
-- Adds account type detection and a plan badge.
-- Adds plan-aware quota safety logic for Pro 20x and Pro 5x.
-- Applies Business Standard/Premium limits only if the seat tier is explicitly detectable; otherwise it refuses to guess.
-- Removes the manual GPT-6 cap assumption from the visible UI; detected plan determines numeric quota rules.
-- Uses a scoped observer for the plan-aware UI module so normal ChatGPT streaming DOM updates do not trigger repeated storage reads.
+Rolling-window “guaranteed remaining” figures are conservative only to the extent that the reconstructed message history is complete and the applicable quota window assumptions are correct.
