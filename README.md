@@ -1,26 +1,52 @@
 # ChatGPT Message Meter
 
-Current development version: **v1.4.1**
+Current development version: **v1.5.0**
 
-A Chrome/Chromium extension that reconstructs ChatGPT usage from account conversation history and keeps a persistent local metadata cache for incremental analytics.
+A Chrome/Chromium extension that reconstructs **ChatGPT Chat** usage from account conversation history, keeps a persistent local metadata cache, and applies conservative plan-aware quota logic where the account tier can be identified safely.
 
 ## Current features
 
 - Persistent `chrome.storage.local` cache
 - Incremental sync based on conversation `update_time`
-- Single-flight sync so reopening the panel does not start duplicate scans
+- **Single-flight sync**: closing/reopening the panel never starts a second scan while one is already running
 - 15-minute automatic refresh cooldown after a completed sync
+- Interrupted initial syncs are resumable: progressive cache saves do **not** falsely mark the sync complete
 - Conservative pacing and retry/backoff for `429` / `5xx`
-- 24 hour / 7 day / 30 day trend dashboard
+- 24 hour / 7 day / 30 day trend dashboard; 24 hours is the default
 - Dashboard model families:
   - GPT-5.6
   - GPT-5.6 Pro
   - GPT-6 Pro
 - Raw model slug + reasoning effort detail table
-- Rolling 7-day GPT-6 Pro safety view
-- Optional manual reset anchor, explicitly treated as an assumption unless ChatGPT exposes the real reset
 - Account-scoped cache
 - Up to 90 days of message metadata retained locally, with a 45-day quota fallback
+
+## Account-plan detection
+
+The extension detects the current ChatGPT account plan from `/api/auth/session` fields and, when necessary, the access token's `https://api.openai.com/auth.chatgpt_plan_type` claim. The detected plan is cached per account scope so the UI can render it immediately on reopen.
+
+Known backend plan slugs include `free`, `go`, `plus`, `prolite`, `pro`, Business variants, Enterprise variants, and Edu variants. Unknown/new slugs remain analytics-only rather than receiving a guessed quota.
+
+### Plan-aware Chat quota rules currently implemented
+
+These rules apply **only to Chat**, not Codex/Work:
+
+- **Pro 20x (`pro`)**
+  - GPT-6 Pro: 200/week
+  - GPT-5.6 Pro: 170/day
+  - GPT-6 Pro + GPT-5.6 Pro combined: 200/day
+- **Pro 5x (`prolite`)**
+  - GPT-6 Pro + GPT-5.6 Pro share 50/week
+- **Business Premium**
+  - Shared Pro bucket: 50/week, but only when an explicit Premium seat signal is detected
+- **Business Standard**
+  - Shared Pro bucket: 15/month, but only when an explicit Standard seat signal is detected
+- **Free / Go / Plus / Enterprise / Edu / unknown Business seat**
+  - Analytics are shown, but no numeric cap is guessed unless a safe rule is available
+
+Because Chat reset anchors are not always exposed, weekly/daily quota displays use rolling windows as conservative usage upper bounds. Therefore the displayed `guaranteed remaining ≥ X` is a lower bound on remaining quota when the history reconstruction is complete.
+
+An optional weekly reset anchor can still be entered in Settings for comparison. It is explicitly treated as an assumption unless ChatGPT exposes a real Chat reset timestamp.
 
 ## Install
 
@@ -45,21 +71,20 @@ The persistent cache stores only:
 - raw model slug
 - reasoning/thinking effort
 - conversation update timestamp/source
+- detected account plan metadata
 
 No chat text is cached.
 
 ## Important limitation
 
-This is a reconstruction from server-side conversation history, **not OpenAI's official quota ledger**. Temporary/deleted chats, failed generations, or quota-bearing events missing from conversation history can create discrepancies.
+This is a reconstruction from server-side conversation history, **not OpenAI's official quota ledger**. Temporary/deleted chats, failed generations, hidden quota-bearing events, or private endpoint changes can create discrepancies.
 
-The rolling 7-day GPT-6 Pro count is therefore useful as a conservative bound only when history retrieval is complete.
+## v1.5.0
 
-## v1.4.1
-
-- 24 HOURS is the default every time the panel opens.
-- Closing/reopening the Meter no longer starts a duplicate scan.
-- An in-progress sync continues in the background; a reopened panel attaches to the same job.
-- Automatic sync is suppressed for 15 minutes after a completed sync.
-- The current chat no longer receives a fake `Date.now()` update timestamp.
-- Server conversation `update_time` is the incremental-fetch trigger.
-- Cache size display reflects the actual cached payload.
+- Keeps and hardens the v1.4.1 session/panel reload fix.
+- Closing/reopening the Meter attaches to an existing page-level sync instead of launching another one.
+- Partial cache checkpoints no longer update `lastSync`; after a hard page reload, an interrupted initial sync resumes incrementally instead of being mistaken for a completed refresh.
+- Adds account type detection and a plan badge.
+- Adds plan-aware quota safety logic for Pro 20x and Pro 5x.
+- Applies Business Standard/Premium limits only if the seat tier is explicitly detectable; otherwise it refuses to guess.
+- Removes the manual GPT-6 cap control from the UI; plan detection determines numeric quota rules.
