@@ -1,0 +1,36 @@
+name: Assemble v1.6.4 meter source
+
+on:
+  push:
+    paths:
+      - '.build/meter64/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble and verify meter.js
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .build/meter64/READY
+          test "$(find .build/meter64 -maxdepth 1 -name 'chunk-*' | wc -l)" -eq 12
+          cat .build/meter64/chunk-* | base64 --decode > meter.js
+          echo "920820bd9af678e2cd4ecb42a0b82ac21b2e53398640905f756a470e93aa564e  meter.js" | sha256sum -c -
+          node --check meter.js
+
+      - name: Commit assembled source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add meter.js
+          git diff --cached --quiet && exit 0
+          git commit -m "Assemble v1.6.4 meter source"
+          git push
