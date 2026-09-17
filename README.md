@@ -8,9 +8,9 @@ A Chrome/Chromium extension that reconstructs **ChatGPT Chat** usage from accoun
 
 - Persistent `chrome.storage.local` cache
 - Incremental sync based on conversation `update_time`
-- **Single-flight sync**: closing/reopening the panel never starts a second scan while one is already running
+- **Single-flight sync**: closing/reopening the Meter panel does not start a second scan while one is already running
+- An in-progress sync continues after the panel is closed; reopening the panel attaches to the same page-level sync job
 - 15-minute automatic refresh cooldown after a completed sync
-- Interrupted initial syncs are resumable: progressive cache saves do **not** falsely mark the sync complete
 - Conservative pacing and retry/backoff for `429` / `5xx`
 - 24 hour / 7 day / 30 day trend dashboard; 24 hours is the default
 - Dashboard model families:
@@ -79,12 +79,13 @@ No chat text is cached.
 
 This is a reconstruction from server-side conversation history, **not OpenAI's official quota ledger**. Temporary/deleted chats, failed generations, hidden quota-bearing events, or private endpoint changes can create discrepancies.
 
+The single-flight protection is page-level: closing/reopening the Meter panel on the same ChatGPT page reuses the active job. A full browser-tab reload destroys the page context, so a still-running job cannot survive that reload; cached data remains available and the next sync reconciles from server history.
+
 ## v1.5.0
 
-- Keeps and hardens the v1.4.1 session/panel reload fix.
-- Closing/reopening the Meter attaches to an existing page-level sync instead of launching another one.
-- Partial cache checkpoints no longer update `lastSync`; after a hard page reload, an interrupted initial sync resumes incrementally instead of being mistaken for a completed refresh.
+- Retains the v1.4.1 session/panel reload fix: closing and reopening the Meter does not launch a second sync.
 - Adds account type detection and a plan badge.
 - Adds plan-aware quota safety logic for Pro 20x and Pro 5x.
 - Applies Business Standard/Premium limits only if the seat tier is explicitly detectable; otherwise it refuses to guess.
-- Removes the manual GPT-6 cap control from the UI; plan detection determines numeric quota rules.
+- Removes the manual GPT-6 cap assumption from the visible UI; detected plan determines numeric quota rules.
+- Uses a scoped observer for the plan-aware UI module so normal ChatGPT streaming DOM updates do not trigger repeated storage reads.
