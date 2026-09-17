@@ -1,4 +1,4 @@
-# ChatCounter 1.7.0 — Universal
+# ChatCounter 1.7.1 — Universal
 
 One source tree and one flat ZIP for Chrome and Orion. This build targets the common capabilities used successfully by the earlier Orion build; it is not a claim that every Chrome/Orion version has identical extension support.
 
@@ -14,7 +14,7 @@ Open **Meter**. A new installation shows **Build history baseline**. An imported
 
 ## Sync & History
 
-All history, sync, heartbeat, queue, error and acquisition settings live in one expandable region.
+All history, sync, heartbeat, queue, error and acquisition settings live in one expandable region. v1.7.1 adds an explicit **Collapse / Expand** button; when collapsed the three usage cards sit immediately below the compact Sync & History row.
 
 - Expanded for first use, a partial baseline, pause, or a new error.
 - Automatically collapsed after the 24h / 7d / 30d historical stages finish with no outstanding issue.
@@ -26,9 +26,9 @@ Worker heartbeat and local listener heartbeat are different from server reconcil
 
 ## Acquisition engine
 
-The initial build is staged: **24 hours → 7 days → 30 days**. Targets share a fixed snapshot anchor. A stage is indexed only after its discovery sources and all discovered conversation tasks finish without unresolved gaps. The UI shows processed/discovered task counts, not a fabricated percentage of total messages.
+The initial build is staged: **24 hours → 7 days → 30 days**. Targets share a fixed snapshot anchor. Core history uses regular + archived conversations. Project discovery is optional: after repeated 5xx/network failures it becomes **degraded** and no longer blocks core baseline progression. The UI distinguishes full completion, core completion with Project warnings, and core gaps.
 
-Progress is durable after every successful discovery page and message page. Jobs retain pagination cursors, known conversation update timestamps, and coverage intervals. Replies are deduplicated by message ID. Partial results are merged rather than replacing a successful cache with an incomplete refresh.
+Between 24h→7d and 7d→30d the engine inserts a conservative 2–5 minute soft pause. Request spacing adapts to recent 5xx/latency. **Start now** may override a soft pause and **Run faster this session** increases request pace for the current tab session only. HTTP 429 / Retry-After, auth, schema and storage protection remain hard stops and cannot be overridden. Progress is durable after every successful discovery page and message page. Jobs retain pagination cursors, known conversation update timestamps, and coverage intervals. Replies are deduplicated by message ID. Partial results are merged rather than replacing a successful cache with an incomplete refresh.
 
 A conversation is skipped only if **both** its update timestamp is unchanged **and** its verified coverage contains the requested range. Widening 24h to 7d/30d may need older pages even when no new chat was posted. Where available an older-page continuation is reused. All metadata from an already downloaded page is reused within the retention window.
 
@@ -45,9 +45,9 @@ Recent-device reconciliation takes priority over older backfill at a page bounda
 
 ## Error handling
 
-HTTP 429 persists an account-wide `Retry-After` cooldown and stops additional requests. The rejected task is an actual error; tasks never requested remain **pending/deferred**. Retry controls cannot bypass this cooldown. 5xx/network errors receive delayed exponential retry; repeated 404/403 become unavailable gaps. Schema/cursor/safety-cap errors stop or flag incomplete work rather than claiming completion. Auth/account changes and storage failures are explicit errors.
+HTTP 429 persists an account-wide `Retry-After` cooldown and stops additional requests. The rejected task is an actual error; tasks never requested remain **pending/deferred**. Retry controls cannot bypass this cooldown. 5xx/network retry uses 10s → 30s → 2m → 10m; optional Project sources become degraded after repeated failure and retry later without blocking core history. Repeated 404/403 remain explicit gaps. Schema/cursor/safety-cap errors stop or flag incomplete work rather than claiming completion. Auth/account changes and storage failures are explicit errors.
 
-The error ledger stores stage, conversation/source identifier, code, HTTP status, attempts, last attempt, and next eligible retry. Raw response bodies, chat text, tokens and headers are not logged or exported.
+The error ledger stores stage, conversation/source identifier, code, HTTP status, attempts, last attempt, next eligible retry and degraded/optional status. The main Sync & History region shows the latest error type directly. Diagnostics adds **Copy diagnostics**, **Export diagnostics.json**, and a 200-entry metadata-only sync ring log. Raw response bodies, chat text, tokens and headers are not logged or exported.
 
 ## Storage and privacy
 

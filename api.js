@@ -29,15 +29,15 @@
   C.request = async (path,scope,signal,reauthed=false) => {
     if(!/^\/backend-api\/(?:conversations?(?:[/?]|$)|gizmos\/)/.test(path))throw C.error('ENDPOINT_BLOCKED','Only history endpoints are permitted.');
     const who=await C.auth();if(who.scope!==scope)throw C.error('ACCOUNT_CHANGED','Account changed. Saved data retained; scan stopped.');
-    const wait=Math.max(0,nextRequest-C.now());if(wait)await C.sleep(wait);if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');nextRequest=C.now()+1500;
+    const wait=Math.max(0,nextRequest-C.now());if(wait)await C.sleep(wait);if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');nextRequest=C.now()+C.requestGap();
     const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
-    const timer=setTimeout(abort,25000);let r;
+    const timer=setTimeout(abort,25000);let r,start=C.now();
     try{
-      r=await fetch(path,{credentials:'include',cache:'no-store',headers:{accept:'application/json',authorization:'Bearer '+token,...(who.account?{'ChatGPT-Account-Id':who.account}:{})},signal:controller.signal});
+      r=await fetch(path,{credentials:'include',cache:'no-store',headers:{accept:'application/json',authorization:'Bearer '+token,...(who.account?{'ChatGPT-Account-Id':who.account}:{})},signal:controller.signal});C.noteRequest(r.status,C.now()-start);
       if(r.status===401&&!reauthed){await C.auth(true);return await C.request(path,scope,signal,true);}
       if(!r.ok){const status=r.status;throw C.error(status===429?'RATE_LIMITED':status===401?'AUTH_REQUIRED':status===403?'ACCESS_DENIED':status===404?'NOT_FOUND':status>=500?'SERVER_ERROR':'HTTP_ERROR','History endpoint returned HTTP '+status+'.',{status,waitMs:status===429?C.after(r):0});}
       try{return await r.json();}catch(_){throw C.error('RESPONSE_SCHEMA','Expected JSON; received a different response format.');}
-    }catch(e){if(e.code)throw e;if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');throw C.error(e.name==='AbortError'?'NETWORK_TIMEOUT':'NETWORK_ERROR','Network request did not complete.');}
+    }catch(e){if(e.code)throw e;C.noteRequest(0,C.now()-start);if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');throw C.error(e.name==='AbortError'?'NETWORK_TIMEOUT':'NETWORK_ERROR','Network request did not complete.');}
     finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
   };
   C.items = j=>{if(Array.isArray(j))return j;for(const key of ['items','conversations','data'])if(Array.isArray(j?.[key]))return j[key];throw C.error('LIST_SCHEMA','Conversation list shape changed; not an empty history.');};

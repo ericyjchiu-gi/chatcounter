@@ -3,7 +3,7 @@ from pathlib import Path
 import hashlib, json, subprocess, zipfile
 root=Path(__file__).resolve().parents[1]
 manifest=json.loads((root/'manifest.json').read_text())
-files=['manifest.json','README.md','RELEASE_NOTES_1.6_TO_1.7.md','tests/browser_regression.py','tests/RESULTS.json']
+files=['manifest.json','README.md','RELEASE_NOTES_1.6_TO_1.7.md','RELEASE_NOTES_1.7.1.md','tests/browser_regression.py','tests/RESULTS.json']
 for group in manifest['content_scripts']:
  for filename in group['js']:
   subprocess.run(['node','--check',str(root/filename)],check=True)
