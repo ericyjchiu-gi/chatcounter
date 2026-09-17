@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
-  "version": "1.4.1",
-  "description": "Cached ChatGPT usage analytics with single-flight incremental sync and 24h/7d/30d model trends.",
+  "version": "1.5.0",
+  "description": "Cached ChatGPT usage analytics with account-plan detection, plan-aware quota safety logic, and single-flight incremental sync.",
   "permissions": [
     "storage"
   ],
@@ -24,7 +24,8 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "meter.js"
+        "meter.js",
+        "plan-aware.js"
       ],
       "run_at": "document_idle",
       "world": "MAIN"
