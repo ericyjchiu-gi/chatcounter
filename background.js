@@ -1,196 +1,63 @@
+/* Optional live-event fanout and scheduled reconciliation. Never owns sync locks. */
+importScripts('webext.js');
 (() => {
-  "use strict";
-
-  const VERSION = "1.6.0";
-  const LOCK_KEY = "cmm_v16_sync_lock";
-  const ALARM = "cmm_v16_background_reconcile";
-  const LIVE_PREFIX = "cmm_v16_live_";
-  const LOCK_LEASE_MS = 30 * 60 * 1000;
-  const LIVE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-
-  const now = () => Date.now();
-  const token = () => `${now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-
-  async function getLock() {
-    const obj = await chrome.storage.session.get(LOCK_KEY);
-    const lock = obj?.[LOCK_KEY] || null;
-    if (lock && Number(lock.expiresAt || 0) <= now()) {
-      await chrome.storage.session.remove(LOCK_KEY);
-      return null;
-    }
-    return lock;
-  }
-
-  async function acquireSync(sender, payload = {}) {
-    const tabId = sender?.tab?.id ?? null;
-    if (tabId == null) return { acquired:false, reason:"no-tab" };
-
-    const existing = await getLock();
-    if (existing) {
-      return {
-        acquired:false,
-        reason:"busy",
-        ownerTabId:existing.ownerTabId,
-        scope:existing.scope || "",
-        startedAt:existing.startedAt || 0,
-        expiresAt:existing.expiresAt || 0
-      };
-    }
-
-    const lock = {
-      token: token(),
-      ownerTabId: tabId,
-      scope: String(payload.scope || ""),
-      reason: String(payload.reason || "manual"),
-      startedAt: now(),
-      expiresAt: now() + LOCK_LEASE_MS
-    };
-    await chrome.storage.session.set({ [LOCK_KEY]: lock });
-    await broadcast({ type:"CMM_BG_EVENT", event:"sync-state", payload:{ running:true, ...lock, token:undefined } });
-    return { acquired:true, token:lock.token, ownerTabId:tabId, expiresAt:lock.expiresAt };
-  }
-
-  async function renewSync(sender, payload = {}) {
-    const tabId = sender?.tab?.id ?? null;
-    const lock = await getLock();
-    if (!lock || lock.token !== payload.token || lock.ownerTabId !== tabId) return { renewed:false };
-    lock.expiresAt = now() + LOCK_LEASE_MS;
-    await chrome.storage.session.set({ [LOCK_KEY]: lock });
-    return { renewed:true, expiresAt:lock.expiresAt };
-  }
-
-  async function releaseSync(sender, payload = {}) {
-    const tabId = sender?.tab?.id ?? null;
-    const lock = await getLock();
-    if (!lock) return { released:true };
-    if (payload.force !== true && (lock.token !== payload.token || lock.ownerTabId !== tabId)) {
-      return { released:false, reason:"not-owner" };
-    }
-    await chrome.storage.session.remove(LOCK_KEY);
-    await broadcast({
-      type:"CMM_BG_EVENT",
-      event:"sync-state",
-      payload:{ running:false, finishedAt:now(), scope:lock.scope || "", reason:lock.reason || "" }
-    });
-    return { released:true };
-  }
-
-  function normalizeLiveEvent(e) {
-    if (!e || !e.id) return null;
-    const t = Number(e.t) || 0;
-    if (!t) return null;
-    return {
-      id:String(e.id),
-      t,
-      model:String(e.model || "unknown"),
-      effort:String(e.effort || "")
-    };
-  }
-
-  async function appendLive(payload = {}) {
-    const scope = String(payload.scope || "");
-    if (!scope) return { ok:false, reason:"no-scope" };
-    const key = `${LIVE_PREFIX}${scope}`;
-    const current = (await chrome.storage.local.get(key))?.[key] || { schema:1, events:{}, lastCapture:0 };
-    if (!current.events || typeof current.events !== "object") current.events = {};
-
-    const cutoff = now() - LIVE_RETENTION_MS;
-    for (const [id, e] of Object.entries(current.events)) {
-      if (!e || Number(e.t || 0) < cutoff) delete current.events[id];
-    }
-
-    let added = 0;
-    for (const raw of (Array.isArray(payload.events) ? payload.events : [])) {
-      const e = normalizeLiveEvent(raw);
-      if (!e) continue;
-      if (!current.events[e.id]) added++;
-      current.events[e.id] = e;
-    }
-    current.lastCapture = now();
-    await chrome.storage.local.set({ [key]: current });
-
-    if (added > 0) {
-      await broadcast({
-        type:"CMM_BG_EVENT",
-        event:"live-updated",
-        payload:{ scope, added, conversationId:String(payload.conversationId || ""), at:current.lastCapture }
-      });
-    }
-    return { ok:true, added, total:Object.keys(current.events).length };
-  }
-
+  'use strict';
+  const {api,call} = globalThis.CMMExt163;
+  const ALARM='cmm_v16_background_reconcile';
+  let appendQueue=Promise.resolve();
   async function broadcast(message) {
-    let tabs = [];
-    try { tabs = await chrome.tabs.query({ url:["https://chatgpt.com/*"] }); }
-    catch (_) { return; }
-    await Promise.allSettled(tabs.map(tab => tab.id != null ? chrome.tabs.sendMessage(tab.id, message) : Promise.resolve()));
+    const tabs=await call(api?.tabs,'query',[{url:['https://chatgpt.com/*']}]).catch(()=>[]);
+    if (!Array.isArray(tabs)) return;
+    await Promise.allSettled(tabs.filter(t=>t.id!=null).map(t=>call(api.tabs,'sendMessage',[t.id,message])));
   }
-
-  async function requestBackgroundReconcile(reason = "alarm") {
-    let tabs = [];
-    try { tabs = await chrome.tabs.query({ url:["https://chatgpt.com/*"] }); }
-    catch (_) { return; }
-    if (!tabs.length) return;
-    tabs.sort((a,b) => Number(b.active) - Number(a.active) || Number(b.lastAccessed || 0) - Number(a.lastAccessed || 0));
-    const target = tabs[0];
-    if (target?.id == null) return;
-    try {
-      await chrome.tabs.sendMessage(target.id, {
-        type:"CMM_BG_EVENT",
-        event:"background-reconcile",
-        payload:{ reason, at:now(), version:VERSION }
-      });
-    } catch (_) {}
+  async function appendLive(payload) {
+    const scope=String(payload.scope || '');
+    if (!/^[a-f0-9]{1,64}$/.test(scope)) throw new Error('Invalid account scope.');
+    const key=`cmm_v16_live_${scope}`;
+    const obj=await call(api.storage.local,'get',[[key]]);
+    if (!obj || typeof obj!=='object') throw new Error('Invalid extension storage result.');
+    const current=obj[key] || {schema:1,events:{},lastCapture:0};
+    if (!current.events || typeof current.events!=='object') current.events={};
+    const cutoff=Date.now()-90*86400000;
+    for(const [id,e] of Object.entries(current.events)) if(!e || e.t<cutoff) delete current.events[id];
+    let added=0;
+    for (const e of (Array.isArray(payload.events)?payload.events:[])) {
+      if (!e?.id || !Number.isFinite(Number(e.t)) || e.t<cutoff) continue;
+      const id=String(e.id);
+      if (!current.events[id]) added++;
+      current.events[id]={id,t:Number(e.t),model:String(e.model || 'unknown'),effort:String(e.effort || '')};
+    }
+    current.lastCapture=Date.now();
+    await call(api.storage.local,'set',[{[key]:current}]);
+    await broadcast({type:'CMM_BG_EVENT_163',event:'live-updated',payload:{scope,added}});
+    return {ok:true,added};
   }
-
-  chrome.runtime.onInstalled.addListener(async () => {
-    try {
-      await chrome.alarms.clear(ALARM);
-      chrome.alarms.create(ALARM, { periodInMinutes:30 });
-    } catch (_) {}
-  });
-
-  chrome.runtime.onStartup.addListener(async () => {
-    try {
-      const alarm = await chrome.alarms.get(ALARM);
-      if (!alarm) chrome.alarms.create(ALARM, { periodInMinutes:30 });
-    } catch (_) {}
-  });
-
-  chrome.alarms.onAlarm.addListener(alarm => {
-    if (alarm?.name === ALARM) requestBackgroundReconcile("alarm");
-  });
-
-  chrome.tabs.onRemoved.addListener(async tabId => {
-    const lock = await getLock();
-    if (lock?.ownerTabId === tabId) {
-      await chrome.storage.session.remove(LOCK_KEY);
-      await broadcast({ type:"CMM_BG_EVENT", event:"sync-state", payload:{ running:false, interrupted:true, finishedAt:now() } });
+  async function tick() {
+    const tabs=await call(api?.tabs,'query',[{url:['https://chatgpt.com/*']}]).catch(()=>[]);
+    if (!Array.isArray(tabs)) return;
+    tabs.sort((a,b)=>Number(b.active)-Number(a.active));
+    for(const tab of tabs) {
+      if(tab.id==null) continue;
+      try { await call(api.tabs,'sendMessage',[tab.id,{type:'CMM_BG_EVENT_163',event:'background-reconcile',payload:{at:Date.now()}}]); break; }
+      catch (_) { /* next reachable tab */ }
     }
-  });
-
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-    if (changeInfo?.status !== "loading") return;
-    const lock = await getLock();
-    if (lock?.ownerTabId === tabId) {
-      await chrome.storage.session.remove(LOCK_KEY);
-      await broadcast({ type:"CMM_BG_EVENT", event:"sync-state", payload:{ running:false, interrupted:true, finishedAt:now() } });
-    }
-  });
-
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (!msg || msg.type !== "CMM_PAGE_BG") return;
-    (async () => {
-      switch (msg.action) {
-        case "acquire-sync": return acquireSync(sender, msg.payload);
-        case "renew-sync": return renewSync(sender, msg.payload);
-        case "release-sync": return releaseSync(sender, msg.payload);
-        case "get-sync-state": return { lock: await getLock() };
-        case "append-live": return appendLive(msg.payload);
-        case "request-background-reconcile": await requestBackgroundReconcile(msg.payload?.reason || "manual"); return { ok:true };
-        default: throw new Error(`Unknown background action: ${msg.action}`);
-      }
-    })().then(sendResponse).catch(e => sendResponse({ error:e?.message || String(e) }));
+  }
+  function schedule() {
+    try {
+      const ret=api?.alarms?.create(ALARM,{periodInMinutes:30});
+      if(ret?.catch) ret.catch(()=>{});
+    } catch (_) { /* manual history sync does not depend on alarms */ }
+  }
+  api?.runtime?.onInstalled?.addListener(schedule);
+  api?.runtime?.onStartup?.addListener(schedule);
+  api?.alarms?.onAlarm?.addListener(a=>{if(a?.name===ALARM) tick().catch(()=>{});});
+  api?.runtime?.onMessage?.addListener((msg,sender,sendResponse)=>{
+    if(msg?.type!=='CMM_PAGE_BG_163') return;
+    if(sender?.tab?.url && !sender.tab.url.startsWith('https://chatgpt.com/')) {sendResponse({error:'Invalid page origin.'});return;}
+    if(msg.action!=='append-live') {sendResponse({error:'Unsupported background action. Sync locks are browser-native.'});return;}
+    const task=appendQueue.then(()=>appendLive(msg.payload || {}));
+    appendQueue=task.catch(()=>{});
+    task.then(sendResponse,e=>sendResponse({error:e?.message || String(e)}));
     return true;
   });
 })();
