@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
-  "version": "1.6.0",
-  "description": "Event-driven ChatGPT usage analytics with live capture, multi-tab coordination, incremental reconciliation, plan-aware quota safety, and local history cache.",
+  "version": "1.6.4",
+  "description": "Orion-compatible ChatGPT usage cache with native cross-tab locking, verified persistence, explicit sync diagnostics, and cleaner initial-build UI.",
   "permissions": [
     "storage",
     "alarms",
@@ -20,6 +20,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "webext.js",
         "bridge.js"
       ],
       "run_at": "document_start"
@@ -29,6 +30,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "sync-lock.js",
         "meter.js"
       ],
       "run_at": "document_start",
