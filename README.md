@@ -1,76 +1,98 @@
 # ChatCounter 1.7.1 — Universal
 
-One source tree and one flat ZIP for Chrome and Orion. This build targets the common capabilities used successfully by the earlier Orion build; it is not a claim that every Chrome/Orion version has identical extension support.
+A Chrome/Orion browser extension that reconstructs model usage from saved ChatGPT
+reply metadata. It is **not an official quota ledger**. One source tree and one flat
+ZIP target their common browser capabilities; platform-specific behaviour still
+requires real-device testing.
 
 ## Install or update
 
-**Orion:** install the flat ZIP using file-based extension installation. `manifest.json` is at the ZIP root.
+For Chrome, extract the package into the same existing unpacked-extension folder,
+then use Reload in `chrome://extensions` and refresh your ChatGPT tabs. For Orion,
+install/update from the flat ZIP using Extensions. Update in place where supported;
+uninstalling may erase extension storage. Only one version should be enabled.
 
-**Chrome:** extract the ZIP to a fixed directory, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked**. For later updates replace files in that same directory, then choose **Reload**.
-
-Prefer an in-place update and keep only one version enabled. Refresh existing ChatGPT tabs after updating. Removing an extension or changing its identity may remove/separate its local cache. Do not clear ChatGPT website data or paste an auth token anywhere.
-
-Open **Meter**. A new installation shows **Build history baseline**. An imported partial v1.6 cache shows **Resume**; saved records are reused, but missing coverage proofs must be verified.
+A brand-new account does not trigger a history scan. Open Meter and choose Build
+history baseline. Existing partial v1.7 metadata is retained; v1.6 metadata migrates
+as saved data awaiting coverage verification. Opening the dashboard may refresh
+account/session metadata, but does not itself enumerate history unless that setting
+is explicitly enabled.
 
 ## Sync & History
 
-All history, sync, heartbeat, queue, error and acquisition settings live in one expandable region. v1.7.1 adds an explicit **Collapse / Expand** button; when collapsed the three usage cards sit immediately below the compact Sync & History row.
+Everything related to acquisition lives here. Collapse keeps the heading, health
+summary and three **24 HOURS / 7 DAYS / 30 DAYS coverage cards**, not the entire
+control panel. Expand restores worker heartbeat, local listener heartbeat, cache,
+queue, errors, pacing, controls and diagnostics. Manual collapse is respected for
+this panel session. Healthy fully indexed history auto-collapses.
 
-- Expanded for first use, a partial baseline, pause, or a new error.
-- Automatically collapsed after the 24h / 7d / 30d historical stages finish with no outstanding issue.
-- A deliberate expand/collapse is retained for the current panel session. A new error reopens it.
-- Default analytical range: **24 HOURS**. The chart groups GPT-5.6 / GPT-5.6 Pro / GPT-6 Pro. Raw model and effort remain in the table.
-- Opening the panel does not start a history scan by default. A lightweight account/session check still happens. Separately, an already-authorized baseline or due automatic reconciliation may run in an active tab.
+The analytical range remains **24 hours by default**, with 7- and 30-day toggles.
+Model series are GPT-5.6, GPT-5.6 Pro and GPT-6 Pro; raw model/effort remains in the
+metadata table. No plan or quota balances are inferred from an empty cache.
 
-Worker heartbeat and local listener heartbeat are different from server reconciliation. Neither heartbeat is an HTTP request to ChatGPT. When no scan is running the worker is correctly shown as **Idle**, rather than inventing a continuously running scanner.
+## Acquisition and coverage
 
-## Acquisition engine
+Core regular/archived history is built 24h -> 7d -> 30d. Each stage's target has a
+fixed snapshot anchor. Projects have independent health; source failures do not
+stop core stages, but Project coverage stays explicitly incomplete. A core-complete
+stage is not the same as fully indexed history.
 
-The initial build is staged: **24 hours → 7 days → 30 days**. Targets share a fixed snapshot anchor. Core history uses regular + archived conversations. Project discovery is optional: after repeated 5xx/network failures it becomes **degraded** and no longer blocks core baseline progression. The UI distinguishes full completion, core completion with Project warnings, and core gaps.
+A native account-scoped Web Lock excludes simultaneous scanners, with a separate
+store lock serializing writes. State, errors, jobs, pagination cursors and checkpoint
+are durable across panels/tabs. A page that is hidden pauses its active request; a
+closed page releases its native lock so an eligible active page can resume. A stale
+advisory heartbeat never steals a lock from a living page.
 
-Between 24h→7d and 7d→30d the engine inserts a conservative 2–5 minute soft pause. Request spacing adapts to recent 5xx/latency. **Start now** may override a soft pause and **Run faster this session** increases request pace for the current tab session only. HTTP 429 / Retry-After, auth, schema and storage protection remain hard stops and cannot be overridden. Progress is durable after every successful discovery page and message page. Jobs retain pagination cursors, known conversation update timestamps, and coverage intervals. Replies are deduplicated by message ID. Partial results are merged rather than replacing a successful cache with an incomplete refresh.
+Each successful discovery/message page is saved. Already indexed conversation
+history is reused only when server update time and proven coverage permit it.
+Widening 24h to 7d/30d may need older pages even when a conversation is unchanged.
+Reconciliation prioritizes recent updates; live capture is best effort for completed
+objects visible in fetch/SSE responses. Unsupported streaming forms fall back to
+saved-history reconciliation. No chat message is sent by this extension.
 
-A conversation is skipped only if **both** its update timestamp is unchanged **and** its verified coverage contains the requested range. Widening 24h to 7d/30d may need older pages even when no new chat was posted. Where available an older-page continuation is reused. All metadata from an already downloaded page is reused within the retention window.
+## Pacing and recovery
 
-Recent-device reconciliation takes priority over older backfill at a page boundary. Its watermark advances to the start of a successful pass, not the end, so changes during the pass can be rediscovered. Failed passes do not advance it. Explicit **Rebuild history** rechecks coverage but retains saved events.
+Default Auto pace uses at least 1.5s/request for 24h, 2.5s for 7d and 4s for 30d.
+Recent latency/failures can make it slower. Stages rest 2–5 minutes; a request budget
+also causes rests. Conservative and Fast modes are per-page-session overrides.
+Start now skips only a soft rest, not a server cooldown. These are client policies,
+not official API thresholds or a guarantee against 429.
 
-## Multiple tabs and recovery
+5xx/network errors back off 10s -> 30s -> 2m -> 10m. Five repeated Project failures
+open a shared 30-minute source circuit. Retry errors once permits one safe manual
+attempt per failing target and reports the result. Rapid repeats are gated. HTTP
+429 / Retry-After, account mismatch, schema and storage errors cannot be overridden.
+Core schema errors stop the scanner; an optional schema failure stops that source.
+Repeated 403/404 remain explicit unavailable gaps, not empty-history success.
 
-- Browser-native Web Locks provide account-scoped scanner exclusion and separate serialized store transactions. There is no background-worker/tab-ID lock in the correctness path.
-- Baseline state, cursors, errors, cooldown and pause are shared through extension local storage.
-- An active worker publishes an advisory heartbeat approximately every 10 seconds, with a 45-second stale threshold.
-- Hiding/navigating the worker page aborts its next request and releases the lock after cleanup. Destruction of the browser context releases its native locks.
-- Another eligible active tab can resume a started baseline from saved work. A stale heartbeat **never** authorizes stealing a native lock held by a living page.
-- If iPadOS suspends every page, nothing executes. Resume requires an active authenticated page. Scheduling is best effort, not a guaranteed background service.
+## Diagnostics and privacy
 
-## Error handling
+The main sync area displays source, error code, HTTP status and retry time. Diagnostics
+can be copied or exported as JSON and include the last 200 allowlisted sync events.
+No chat text, token, raw response body or auth header is logged or exported. The
+persistent cache contains message IDs, conversation IDs, timestamps, model/effort,
+coverage, job/control state and source health. History metadata is retained up to
+90 days (45-day fallback on storage quota errors). Old replies alone cannot prove
+that deleted/temporary/failed quota-bearing requests have been captured.
 
-HTTP 429 persists an account-wide `Retry-After` cooldown and stops additional requests. The rejected task is an actual error; tasks never requested remain **pending/deferred**. Retry controls cannot bypass this cooldown. 5xx/network retry uses 10s → 30s → 2m → 10m; optional Project sources become degraded after repeated failure and retry later without blocking core history. Repeated 404/403 remain explicit gaps. Schema/cursor/safety-cap errors stop or flag incomplete work rather than claiming completion. Auth/account changes and storage failures are explicit errors.
+Authentication uses the current ChatGPT web session; the access token stays in page
+memory and is sent only to permitted same-origin history endpoints. Exact quota
+remaining remains UNKNOWN. Numeric plan references are inherited v1.6 presets,
+not current server-reported entitlements, and should not be treated as authoritative.
 
-The error ledger stores stage, conversation/source identifier, code, HTTP status, attempts, last attempt, next eligible retry and degraded/optional status. The main Sync & History region shows the latest error type directly. Diagnostics adds **Copy diagnostics**, **Export diagnostics.json**, and a 200-entry metadata-only sync ring log. Raw response bodies, chat text, tokens and headers are not logged or exported.
+## Source and tests
 
-## Storage and privacy
+- core.js: metadata store, migration, identity-independent primitives
+- api.js: read-only session/history transport
+- tasks.js: discovery/detail parsing and coverage checkpoints
+- policy.js: completion, source isolation, retry, throttle and diagnostics policies
+- sync.js: native-lock scheduler and explicit control outcomes
+- live.js: best-effort passive metadata observation
+- ui.js: dashboard, compact sync panel and exports
+- bridge.js: callback/Promise-compatible extension storage adapter
 
-Uses callback- or Promise-compatible `storage.local`, verified with a disposable write/read probe before scanning. No service worker, `tabs`, `alarms`, `storage.session`, remote libraries, or telemetry is required. The only extension permission is `storage`, scoped for injection to `https://chatgpt.com/*`.
+Run `python tests/browser_regression.py` and `python tests/stability_171.py` with
+Playwright and Chromium available. Run `python tools/package.py` for a deterministic
+flat ZIP. Test results are fixture-based, not a real-account or Orion/iPad certification.
 
-Tokens remain inside the API module's memory and are returned only to ChatGPT. Cached data is metadata: message IDs, timestamps, model/effort, conversation IDs, coverage, queue and diagnostic state. Account and user identifiers are hashed into the new storage scope. Legacy v1.6 data is imported without deleting the old copy; its coverage is deliberately treated as unverified.
-
-Retention is 90 days; a storage-quota error triggers a 45-day retry while keeping the latest 30 days. If storage is still full, the write fails visibly. No valid recent records are silently dropped to make a scan appear successful.
-
-## Quota interpretation
-
-This is a ledger of observed **saved replies**, not the official usage ledger. Deleted/temporary chats, incomplete generations, missing metadata, branches and private-endpoint differences may affect counts. **Even an indexed history is not proof of exact remaining quota.** The UI therefore never says “guaranteed remaining”.
-
-Plan labels and numeric references preserve the existing v1.6 presets. They are labeled references, not freshly verified or server-reported entitlements. Generic Business/Enterprise/Edu/unknown plans do not receive a guessed personal Pro cap. The manual reset remains an assumption, not a copied Codex reset.
-
-## Tests and package
-
-`python tests/browser_regression.py` runs offline Chromium integration checks (requires Python Playwright and Chromium). DOM interactions run in a real browser; ChatGPT HTTP, extension storage and Web Locks are simulated. The test fixture uses an accelerated clock for request pacing. `tests/RESULTS.json` records the executed checks. These are **not Orion/iPad device tests**.
-
-`python tools/package.py` validates the manifest and JavaScript, then builds a reproducible flat ZIP in `dist/` plus per-file SHA-256 hashes. The GitHub workflow packages committed source directly; it does not assemble source from encoded chunks.
-
-## Platform references
-
-- Chrome storage API: https://developer.chrome.com/docs/extensions/reference/api/storage
-- Web Locks: https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API
-- Orion iOS/iPadOS extension status: https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html
+See RELEASE_NOTES_1.7.1.md for the full change list.

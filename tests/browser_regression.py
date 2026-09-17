@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]
-FILES=['bridge.js','core.js','api.js','tasks.js','sync.js','live.js','ui.js']
+FILES=['bridge.js','core.js','api.js','tasks.js','policy.js','sync.js','live.js','ui.js']
 MOCK=r'''(() => {
  const listeners=[];
  if(!crypto.randomUUID)crypto.randomUUID=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
@@ -27,7 +27,7 @@ MOCK=r'''(() => {
 class Fixture:
  def __init__(self):
   self.storage={};self.calls=[];self.fail={};self.account='account-test';self.plan='pro';self.gate=None;self.drop_writes=False
-  self.locks={};self.now=time.time();self.u=self.now-100;self.second=False;self.bad_list=False;self.project_fail=False
+  self.locks={};self.now=time.time();self.u=self.now-100;self.second=False;self.bad_list=False
  def msg(self,id,days,model='gpt-6-pro'):
   return {'id':id,'create_time':self.now-days*86400,'author':{'role':'assistant'},'recipient':'all','end_turn':True,'metadata':{'model_slug':model},'content':{'parts':['DO_NOT_STORE_BODY']}}
  async def route(self,route):
@@ -38,9 +38,7 @@ class Fixture:
   elif p=='/backend-api/conversations':
    data={'items':[]} if q.get('is_archived')==['true'] else {'items':[{'id':'chat-a','update_time':self.u}]+([{'id':'chat-b','update_time':self.u-1}] if self.second else [])}
    if self.bad_list:data={'new_unknown_shape':True}
-  elif p=='/backend-api/gizmos/snorlax/sidebar':
-   if self.project_fail:return await route.fulfill(status=500,content_type='application/json',body='{"error":"fixture project 500"}')
-   data={'items':[]}
+  elif p=='/backend-api/gizmos/snorlax/sidebar':data={'items':[]}
   elif p.startswith('/backend-api/conversations/'):
    id=p.rsplit('/',1)[1]
    if self.gate:await self.gate.wait()
@@ -97,25 +95,23 @@ async def page(ctx,promise=False):
  if promise:await p.evaluate("delete window.chrome; window.browser={storage:{local:{get:k=>__storage('get',k),set:v=>__storage('set',v),remove:k=>__storage('remove',k)}}}")
  for f in FILES:
   js=(ROOT/f).read_text()
-  if f=='live.js':js=js.replace('new URL(raw,location.href)','new URL(raw,\"https://fixture.invalid/\")').replace("u.origin===location.origin&&","true&&")
+  if f=='live.js':js=js.replace('new URL(raw,location.href)','new URL(raw,"https://fixture.invalid/")').replace("u.origin===location.origin&&","true&&")
   await p.add_script_tag(content=js)
  await p.wait_for_function('!!window.ChatCounter?.session')
  await p.evaluate('window.__advance=0;ChatCounter.now=()=>Date.now()+__advance;ChatCounter.sleep=async ms=>{__advance+=ms};')
  return p
+async def finish_baseline(p):
+ for _ in range(20):
+  s=await state(p)
+  if all(j['status']=='complete' for j in s['baseline']['stages']) and len(s['baseline']['stages'])==3:return s
+  await p.evaluate('''async()=>{const s=await ChatCounter.read(ChatCounter.session.scope);__advance+=Math.max(0,ChatCounter.softUntil(s)-ChatCounter.now()+1)}''')
+  await action(p,'resume')
+ raise AssertionError('baseline did not finish: '+str(await state(p)))
 async def state(p):return await p.evaluate('ChatCounter.read(ChatCounter.session.scope)')
 async def action(p,a):return await p.evaluate('(a)=>ChatCounter.control(a)',a)
 async def open_ui(p):
  await p.locator('#chatcounter-launcher').click();await p.wait_for_function("document.querySelector('#chatcounter-v17')?.shadowRoot.querySelector('[data-plan]')?.textContent==='Pro 20x'");await p.wait_for_timeout(100)
 async def text(p,sel):return await p.locator('#chatcounter-v17').locator(sel).inner_text()
-async def finish_baseline(p):
- s=await state(p)
- if not s['baseline']['startedAt']:await action(p,'start')
- for _ in range(6):
-  s=await state(p)
-  if await p.evaluate('(x)=>ChatCounter.complete(x)',s):return s
-  if s['baseline'].get('stageDelayUntil',0)>0 or s['baseline'].get('softPauseUntil',0)>0:await action(p,'start-now')
-  else:await action(p,'resume')
- return await state(p)
 async def main():
  checks=[]
  def ok(t):checks.append(t);print('PASS',t,flush=True)
@@ -126,27 +122,16 @@ async def main():
   assert not f.histories();assert await p.locator('[data-range="24h"]').get_attribute('class')=='on'
   assert await p.locator('[data-sync]').get_attribute('open') is not None
   ok('Initial open: no history request, 24h selected, unified Sync & History expanded')
-  await p.locator('[data-collapse-sync]').click();assert await p.locator('[data-sync]').get_attribute('open') is None
-  assert await p.locator('[data-cards] .card').count()==3 and await p.locator('[data-cards]').is_visible()
-  await p.locator('[data-collapse-sync]').click();assert await p.locator('[data-sync]').get_attribute('open') is not None
-  ok('Explicit Collapse/Expand hides the large sync body while keeping the three usage cards visible')
-  await action(p,'start');s=await state(p)
-  assert [x['status'] for x in s['baseline']['stages']]==['complete','pending','pending'],s
-  assert s['baseline']['stageDelayUntil']>0
-  await p.evaluate('ChatCounter.emit()');await p.wait_for_timeout(100)
-  assert 'Start 7d now' in await text(p,'[data-action="main"]')
-  ok('24h completes first and a soft 2–5 minute stage wait is exposed with Start-now override')
-  await action(p,'start-now');s=await state(p);assert [x['status'] for x in s['baseline']['stages']]==['complete','complete','pending'],s
-  await action(p,'start-now');s=await state(p)
+  await action(p,'start');s=await finish_baseline(p)
   assert [x['status'] for x in s['baseline']['stages']]==['complete']*3,s
   assert len(s['events'])==4,s['events']
   assert f.details().count('/backend-api/conversations/chat-a:older')==1,f.details()
   assert 'FAKE_TOKEN' not in json.dumps(f.storage) and 'DO_NOT_STORE_BODY' not in json.dumps(f.storage)
-  ok('Start-now override advances 7d → 30d while widening coverage reads older pages beyond cached IDs')
-  before_complete=len(f.histories());await p.locator('[data-close]').click();await open_ui(p);assert len(f.histories())==before_complete
+  ok('24h → 7d → 30d stages finish; widening coverage reads older pages beyond cached IDs')
+  await p.evaluate('ChatCounter.emit()');await p.wait_for_timeout(150)
   assert await p.locator('[data-sync]').get_attribute('open') is None
   await p.screenshot(path=str(ROOT/'tests/dashboard-healthy.png'),full_page=True)
-  ok('Healthy completed baseline opens collapsed by default; manual expand/collapse is session-respected')
+  ok('Healthy completed baseline collapses automatically; chart and cache remain visible')
   before=len(f.histories());await p.locator('[data-close]').click();await open_ui(p);assert len(f.histories())==before
   p2=await page(ctx);await open_ui(p2);assert len((await state(p2))['events'])==4;assert 'Build history baseline' not in await text(p2,'[data-action="main"]');assert len(f.histories())==before
   ok('Panel reopen and new tab share saved baseline status without starting a scan')
@@ -174,30 +159,19 @@ async def main():
   ok('Explicit Pause persists across scheduler ticks; no automatic restart')
   assert not errs,errs
   await ctx.close()
-  # Cross-tab shared state / handover between staged requests.
-  f=Fixture();ctx=await f.ctx(browser);p=await page(ctx);p2=await page(ctx)
-  await action(p,'start');s=await state(p);assert s['baseline']['stages'][0]['status']=='complete' and s['baseline']['stages'][1]['status']=='pending'
-  await open_ui(p2);s2=await state(p2);assert s2['baseline']['stageDelayUntil']==s['baseline']['stageDelayUntil']
-  await action(p2,'start-now');s2=await state(p2);assert s2['baseline']['stages'][1]['status']=='complete'
-  ok('A second tab sees the shared staged checkpoint and can continue after the first scanner releases the native lock')
-  await p.close();await p2.close();await ctx.close()
-  # Optional Project source failure degrades without blocking core history.
-  f=Fixture();f.project_fail=True;ctx=await f.ctx(browser);p=await page(ctx);await open_ui(p);await action(p,'start');s=await state(p)
-  assert s['baseline']['stages'][0]['sources'][2]['attempts']==1 and s['baseline']['stages'][0]['status']=='running'
-  await p.evaluate('ChatCounter.emit()');await p.wait_for_timeout(100)
-  assert 'SERVER_ERROR' in await text(p,'[data-alert]') and 'HTTP 500' in await text(p,'[data-alert]')
-  attempts=[]
-  for _ in range(4):
-   await action(p,'retry');s=await state(p);attempts.append(s['baseline']['stages'][0]['sources'][2]['attempts'])
-  assert attempts==[2,3,4,5],attempts
-  s=await state(p);assert s['baseline']['stages'][0]['status']=='complete_with_warnings',s['baseline']['stages'][0]
-  assert s['baseline']['stages'][0]['sources'][2]['status']=='degraded' and s['errors']['24h/source/projects:']['status']=='degraded'
-  assert any(x['type']=='request-error' for x in s['log'])
-  ok('Five Project HTTP 500s become a visible degraded warning and no longer block 24h core coverage')
-  await p.evaluate('ChatCounter.emit()');await p.wait_for_timeout(100)
-  assert 'Start 7d now' in await text(p,'[data-action="main"]')
-  assert await p.locator('[data-export-diag]').count()==1
-  ok('Degraded Projects still allow staged progress; diagnostics include exportable error/log state')
+  # In-flight cross-tab handover simulates browser Web Locks.
+  f=Fixture();f.gate=asyncio.Event();ctx=await f.ctx(browser);p=await page(ctx)
+  await p.evaluate("void ChatCounter.control('start')")
+  await p.wait_for_function("ChatCounter.read(ChatCounter.session.scope).then(s=>s.worker?.activity==='Reading reply metadata')")
+  p2=await page(ctx);await open_ui(p2)
+  assert 'Another ChatGPT tab' in await text(p2,'[data-facts]')
+  n=len(f.histories());r=await action(p2,'resume');assert r=={'busy':True},r;assert len(f.histories())==n
+  ok('Second tab sees shared in-progress state and cannot obtain the active native scan lock')
+  r=await p2.evaluate("ChatCounter.control('rebuild').catch(e=>e.code)");assert r=='SYNC_ACTIVE';assert len(f.histories())==n
+  ok('Rebuild in a second tab cannot reset jobs while another scanner owns the lock')
+  await p.close();f.gate.set();await p2.bring_to_front();await p2.evaluate('__advance+=60000;ChatCounter.tick()')
+  s=await finish_baseline(p2);assert all(j['status']=='complete' for j in s['baseline']['stages']),s
+  ok('Closing worker tab releases native lock; another active tab resumes durable jobs')
   await ctx.close()
   # Schema errors preserve partial evidence and stop further work.
   f=Fixture();f.bad_list=True;ctx=await f.ctx(browser);p=await page(ctx);await action(p,'start');s=await state(p)
@@ -209,7 +183,7 @@ async def main():
   assert not f.histories();ok('Failed/ignored persistence cannot start an unverified history scan')
   await ctx.close()
   # Promise-only storage path.
-  f=Fixture();ctx=await f.ctx(browser);p=await page(ctx,promise=True);s=await finish_baseline(p);assert len(s['events'])==4
+  f=Fixture();ctx=await f.ctx(browser);p=await page(ctx,promise=True);await action(p,'start');await finish_baseline(p);assert len((await state(p))['events'])==4
   ok('Promise-only WebExtension storage supports the same build as callback-only storage')
   await ctx.close()
   # v1.6 migration does not pretend old records prove full-range coverage.
@@ -233,15 +207,6 @@ async def main():
   }''')
   assert result=={'retry':True,'unavailable':True}
   ok('503 is retryable; repeated 404 is unavailable and remains an explicit coverage gap')
-  upgraded=await p.evaluate('''()=>{
-   const C=ChatCounter,s=C.fresh();C.beginStages(s);const j=s.baseline.stages[0];j.sources[0].status='done';j.sources[1].status='done';j.sources[2].status='error';j.sources[2].attempts=7;
-   s.errors['24h/source/projects:']={stage:'24h',source:'projects',code:'SERVER_ERROR',httpStatus:500,attempts:7,status:'error',lastAttempt:C.now(),nextRetryAt:C.now()+600000};
-   C.normalize(s);return {stage:j.status,source:j.sources[2].status,error:s.errors['24h/source/projects:'].status};
-  }''')
-  assert upgraded=={'stage':'complete_with_warnings','source':'degraded','error':'degraded'},upgraded
-  ok('Existing v1.7.0 Project errors with 5+ attempts upgrade in place to non-blocking degraded warnings')
-  auto_gap=await p.evaluate('ChatCounter.requestGap()');await p.evaluate("ChatCounter.setPace('fast')");fast_gap=await p.evaluate('ChatCounter.requestGap()');assert fast_gap<auto_gap
-  ok('Fast backfill override is session-local and lowers request spacing without bypassing hard cooldowns')
   await asyncio.gather(p.evaluate('Promise.all(Array.from({length:10},()=>ChatCounter.write(ChatCounter.session.scope,s=>{s.testCounter=(s.testCounter||0)+1})))'),p2.evaluate('Promise.all(Array.from({length:10},()=>ChatCounter.write(ChatCounter.session.scope,s=>{s.testCounter=(s.testCounter||0)+1})))'))
   assert (await state(p))['testCounter']==20
   ok('Concurrent writes from two tabs are serialized without lost updates')

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
   "version": "1.7.1",
-  "description": "Universal ChatGPT usage analytics with adaptive staged backfill, shared Sync & History status, structured diagnostics, and metadata-only storage.",
+  "description": "Universal usage analytics with resumable history, source-aware retries, adaptive pacing, diagnostics and compact Sync & History.",
   "permissions": [
     "storage"
   ],
@@ -27,6 +27,7 @@
         "core.js",
         "api.js",
         "tasks.js",
+        "policy.js",
         "sync.js",
         "live.js",
         "ui.js"

@@ -1,22 +1,21 @@
-/* Resumable discovery + one-page history tasks. Core coverage can complete while optional Projects are degraded. */
+/* Resumable discovery + one-page history tasks. Coverage is separate from count. */
 (() => {
   'use strict';const C=window.ChatCounter;
-  C.source = (kind,id='') => ({kind,id,key:kind+':'+id,optional:['projects','project'].includes(kind),offset:0,cursor:'0',status:'pending',attempts:0,nextAt:0,pages:0});
-  C.job = (key,from,end,cutoff=from,force=false) => ({key,from,end,cutoff,force,status:'pending',createdAt:C.now(),sources:[C.source('regular'),C.source('archived'),C.source('projects')],tasks:{},completedAt:0,coreCompletedAt:0});
+  C.job = (key,from,end,cutoff=from,force=false) => ({key,from,end,cutoff,force,status:'pending',createdAt:C.now(),sources:[C.source('regular'),C.source('archived'),C.source('projects')],tasks:{},completedAt:0});
+  C.source = (kind,id='') => ({kind,id,key:kind+':'+id,offset:0,cursor:'0',optional:['projects','project'].includes(kind),status:'pending',attempts:0,nextAt:0,pages:0});
   C.beginStages = s => {
     if(s.baseline.stages.length)return;
     const end=C.now();s.baseline.startedAt ||= end;s.baseline.anchor=end;
     s.baseline.stages=[C.job('24h',end-C.DAY,end),C.job('7d',end-7*C.DAY,end),C.job('30d',end-30*C.DAY,end)];
-    C.log(s,'baseline-start',{anchor:end});
   };
   C.isIndexed = (c,u,from) => !!(c?.complete&&c.from!=null&&c.from<=from&&u&&c.u&&Math.abs(u-c.u)<1000);
   function upsert(s,j,header,source){
     const id=String(header.id||header.conversation_id||'');if(!id)return;
     const u=C.epoch(header.update_time??header.updated_at??header.create_time);
     if(u&&u<j.cutoff)return;
-    const old=j.tasks[id];if(old&&(!u||u<=old.u))return;
-    const c=s.conversations[id],optional=source==='project';
-    j.tasks[id]={id,u,source,optional,status:!j.force&&C.isIndexed(c,u,j.from)?'unchanged':'pending',cursor:!j.force&&c?.complete&&c.u===u&&c.from>j.from?c.boundaryCursor||null:null,pages:0,attempts:0,nextAt:0,from:j.from,end:j.end,provenFrom:c?.from??null,provenTo:c?.to||0,proven:!!c?.complete};
+    const old=j.tasks[id];if(old&&(!u||u<=old.u)){if(source!=='project'){old.optional=false;old.source=source;}return;}
+    const c=s.conversations[id];
+    j.tasks[id]={id,u,source,optional:source==='project',status:!j.force&&C.isIndexed(c,u,j.from)?'unchanged':'pending',cursor:!j.force&&c?.complete&&c.u===u&&c.from>j.from?c.boundaryCursor||null:null,pages:0,attempts:0,nextAt:0,from:j.from,end:j.end,provenFrom:c?.from??null,provenTo:c?.to||0,proven:!!c?.complete};
   }
   C.fetchSource = async (source,job,scope,signal) => {
     let path;
@@ -29,6 +28,7 @@
     const sorted=times.every((t,i)=>t>0&&(!i||times[i-1]>=t));
     const cutoffReached=sorted&&times.length>0&&times[times.length-1]<job.cutoff;
     const next=j.next_cursor??j.cursor??null;
+    // Root uses offset pagination. Project ordering is not assumed; follow all pages.
     const done=source.kind==='project'?(!next||!items.length):(!items.length||items.length<100||cutoffReached);
     if(!done&&source.pages>=99)throw C.error('LIST_PAGE_CAP','Discovery safety limit reached; coverage remains partial.');
     if(source.kind==='project'&&!done&&next===source.cursor)throw C.error('CURSOR_INVALID','Project cursor repeated.');
@@ -48,6 +48,7 @@
     }
   };
   C.applyDetail = (s,j,task,result) => {
+    // Inspect the whole page before stopping. A cached live event alone is not a coverage proof.
     const overlap=task.proven&&task.provenFrom!=null&&task.provenFrom<=task.from&&result.oldest!==null&&result.oldest<=task.provenTo;
     for(const e of result.events)if(e.t<=C.now())C.merge(s,e,task.id);
     const reached=!result.hasPrevious||(result.oldest!==null&&result.oldest<=task.from)||overlap;
@@ -63,55 +64,32 @@
       if(task.pages>=200)C.recordError(s,j,task,'chat',C.error('DETAIL_PAGE_CAP','Conversation pagination safety limit reached; partial data saved.'));
     }
   };
-  const good=t=>['done','unchanged'].includes(t.status),terminalGap=t=>['unavailable'].includes(t.status);
   C.refreshJob = j => {
-    const tasks=Object.values(j.tasks||{}),required=[...(j.sources||[]).filter(x=>!x.optional),...tasks.filter(x=>!x.optional)],optional=[...(j.sources||[]).filter(x=>x.optional),...tasks.filter(x=>x.optional)];
-    const requiredGood=required.every(good),requiredTerminal=required.every(t=>good(t)||terminalGap(t));
-    const optionalGood=optional.every(good),optionalWarning=optional.every(t=>good(t)||['degraded','unavailable'].includes(t.status));
-    if(requiredGood){
-      if(optionalGood){j.status='complete';j.completedAt||=C.now();}
-      else if(optionalWarning||j.coreCompletedAt){j.coreCompletedAt||=C.now();j.status='complete_with_warnings';j.completedAt||=C.now();}
-      else j.status='running';
-    }else if(requiredTerminal){j.status='partial';j.completedAt||=C.now();}
-    else j.status=j.status==='pending'?'pending':'running';
+    const tasks=Object.values(j.tasks),all=[...j.sources,...tasks];
+    if(all.every(t=>['done','unchanged'].includes(t.status))){j.status='complete';j.completedAt=C.now();}
+    else if(all.every(t=>['done','unchanged','unavailable'].includes(t.status)))j.status='partial';
+    else j.status='running';
   };
-  C.nextTask = (j,includeDegraded=false) => {
-    const due=t=>['pending','error',...(includeDegraded?['degraded']:[])].includes(t.status)&&(!t.nextAt||t.nextAt<=C.now());
-    const task=Object.values(j.tasks||{}).find(due);if(task)return {type:'chat',item:task};
-    const source=(j.sources||[]).find(due);return source?{type:'source',item:source}:null;
-  };
-  C.nextOptionalTask = (j,ignoreDelay=false) => {
-    const due=t=>t.optional&&['pending','error','degraded'].includes(t.status)&&(ignoreDelay||!t.nextAt||t.nextAt<=C.now());
-    const task=Object.values(j.tasks||{}).find(due);if(task)return {type:'chat',item:task};
-    const source=(j.sources||[]).find(due);return source?{type:'source',item:source}:null;
+  C.nextTask = j => {
+    // Consume discovered recent messages first; continue discovery when the current page is processed.
+    const due=t=>['pending','error'].includes(t.status)&&(!t.nextAt||t.nextAt<=C.now());
+    const task=Object.values(j.tasks).find(due);if(task)return {type:'chat',item:task};
+    const source=j.sources.find(due);return source?{type:'source',item:source}:null;
   };
   C.counts = j => {
-    const tasks=Object.values(j?.tasks||{}),sources=j?.sources||[],all=tasks.concat(sources),core=sources.filter(x=>!x.optional).concat(tasks.filter(x=>!x.optional)),optional=sources.filter(x=>x.optional).concat(tasks.filter(x=>x.optional));
-    return {
-      done:tasks.filter(t=>t.status==='done').length,unchanged:tasks.filter(t=>t.status==='unchanged').length,discovered:tasks.length,
-      errors:all.filter(t=>['error','unavailable'].includes(t.status)&&!t.optional).length,warnings:all.filter(t=>['error','unavailable','degraded'].includes(t.status)&&t.optional).length,
-      pending:tasks.filter(t=>t.status==='pending').length,optionalPending:optional.filter(t=>['pending','error','degraded'].includes(t.status)).length,
-      discoveryDone:sources.filter(x=>!x.optional).every(t=>t.status==='done'),coreComplete:core.every(good)
-    };
+    const tasks=Object.values(j?.tasks||{}),all=tasks.concat(j?.sources||[]);
+    return {done:tasks.filter(t=>t.status==='done').length,unchanged:tasks.filter(t=>t.status==='unchanged').length,discovered:tasks.length,errors:all.filter(t=>['error','unavailable'].includes(t.status)).length,pending:tasks.filter(t=>t.status==='pending').length,discoveryDone:(j?.sources||[]).every(t=>t.status==='done')};
   };
   C.recordError = (s,j,entry,type,e) => {
     entry.attempts=(entry.attempts||0)+1;entry.lastAttempt=C.now();
-    const code=e.code||'UNEXPECTED_ERROR',status=e.status||null,optional=entry.optional===true||['projects','project'].includes(entry.kind)||entry.source==='project';
-    entry.optional=optional;
+    const code=e.code||'UNEXPECTED_ERROR',status=e.status||null;
     const unavailable=(status===404||status===403)&&entry.attempts>=2;
     const schema=/SCHEMA|CURSOR|PAGE_CAP/.test(code);
-    let wait=10000;
-    if(status===429)wait=Math.max(1000,e.waitMs||60000);
-    else if(status>=500||['NETWORK_ERROR','NETWORK_TIMEOUT'].includes(code))wait=[10000,30000,120000,600000][Math.min(entry.attempts-1,3)];
-    else wait=Math.min(10*60000,10000*2**Math.min(entry.attempts-1,6));
-    const degraded=optional&&(schema||((status>=500||['NETWORK_ERROR','NETWORK_TIMEOUT'].includes(code))&&entry.attempts>=5));
-    entry.status=unavailable?'unavailable':degraded?'degraded':'error';
-    entry.nextAt=unavailable?0:degraded?C.now()+30*60000:schema&&!optional?0:C.now()+wait;
+    const wait=status===429?Math.max(1000,e.waitMs||60000):Math.min(15*60000,10000*2**Math.min(entry.attempts-1,6));
+    entry.status=unavailable?'unavailable':'error';entry.nextAt=unavailable||schema?null:C.now()+wait;
     const key=j.key+'/'+type+'/'+(type==='chat'?entry.id:entry.key);
-    s.errors[key]={stage:j.key,conversationId:type==='chat'?entry.id:null,source:type==='source'?entry.kind:(entry.optional?'project-chat':null),code,httpStatus:status,attempts:entry.attempts,lastAttempt:C.now(),retryAfterMs:wait,nextRetryAt:entry.nextAt,message:String(e.message).slice(0,180),status:entry.status,optional};
+    s.errors[key]={stage:j.key,conversationId:type==='chat'?entry.id:null,source:type==='source'?entry.kind:null,code,httpStatus:status,attempts:entry.attempts,lastAttempt:C.now(),retryAfterMs:wait,nextRetryAt:entry.nextAt,message:String(e.message).slice(0,180),status:entry.status};
     if(status===429)s.cooldownUntil=C.now()+wait;
-    if(schema&&!optional||['AUTH_REQUIRED','ACCOUNT_CHANGED','STORAGE_ERROR','STORAGE_READBACK_FAILED','STORAGE_TIMEOUT'].includes(code))s.blocked=code;
-    C.log(s,'request-error',{stage:j.key,target:type==='chat'?'chat':entry.kind||'source',code,httpStatus:status||0,attempts:entry.attempts,status:entry.status,nextRetryAt:entry.nextAt});
-    C.refreshJob(j);
+    if(schema||['AUTH_REQUIRED','ACCOUNT_CHANGED','STORAGE_ERROR','STORAGE_READBACK_FAILED','STORAGE_TIMEOUT'].includes(code))s.blocked=code;
   };
 })();

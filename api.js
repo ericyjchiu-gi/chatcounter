@@ -29,7 +29,15 @@
   C.request = async (path,scope,signal,reauthed=false) => {
     if(!/^\/backend-api\/(?:conversations?(?:[/?]|$)|gizmos\/)/.test(path))throw C.error('ENDPOINT_BLOCKED','Only history endpoints are permitted.');
     const who=await C.auth();if(who.scope!==scope)throw C.error('ACCOUNT_CHANGED','Account changed. Saved data retained; scan stopped.');
-    const wait=Math.max(0,nextRequest-C.now());if(wait)await C.sleep(wait);if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');nextRequest=C.now()+C.requestGap();
+    const wait=Math.max(0,nextRequest-C.now());if(wait)await C.sleep(wait);if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');
+    const saved=await C.read(scope);
+    if(saved.paused)throw C.error('INTERRUPTED','Paused; checkpoint retained.');
+    if(saved.cooldownUntil>C.now())throw C.error('RATE_LIMIT_WAIT','Shared server cooldown is active.',{status:429,waitMs:saved.cooldownUntil-C.now()});
+    const gap=C.requestGap(saved),sharedWait=Math.max(0,(saved.governor.lastRequestAt||0)+gap-C.now());
+    if(sharedWait)await C.sleep(sharedWait);
+    if(signal?.aborted)throw C.error('INTERRUPTED','Page paused; checkpoint retained.');
+    nextRequest=C.now()+gap;
+    await C.write(scope,s=>{s.governor.lastRequestAt=C.now();});
     const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
     const timer=setTimeout(abort,25000);let r,start=C.now();
     try{
