@@ -3,16 +3,16 @@ from pathlib import Path
 import hashlib,json,os,subprocess,zipfile
 ROOT=Path(__file__).resolve().parents[1]
 manifest=json.loads((ROOT/'manifest.json').read_text())
-names={'manifest.json','README.md','RELEASE_NOTES_1.7.1.md','RELEASE_NOTES_1.6_TO_1.7.md'}
+names={'manifest.json','README.md','RELEASE_NOTES_1.7.2.md','RELEASE_NOTES_1.7.1.md','RELEASE_NOTES_1.6_TO_1.7.md'}
 for block in manifest['content_scripts']:
  for name in block['js']:
   subprocess.run(['node','--check',str(ROOT/name)],check=True)
   names.add(name)
-for name in ('tests/RESULTS.json','tests/STABILITY_171_RESULTS.json','tests/browser_regression.py','tests/stability_171.py'):
+for name in ('tests/RESULTS.json','tests/STABILITY_172_RESULTS.json','tests/browser_regression.py','tests/stability_172.py'):
  names.add(name)
 blobs={name:(ROOT/name).read_bytes() for name in sorted(names)}
-commit=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True)
-build={'version':manifest['version'],'commit':os.environ.get('CHATCOUNTER_COMMIT') or (commit.stdout.strip() if commit.returncode==0 else None),'sha256':{n:hashlib.sha256(b).hexdigest() for n,b in blobs.items()}}
+commit=os.environ.get('CHATCOUNTER_COMMIT')
+build={'version':manifest['version'],'commit':commit,'sha256':{n:hashlib.sha256(b).hexdigest() for n,b in blobs.items()}}
 blobs['BUILD.json']=(json.dumps(build,indent=2)+'\n').encode()
 out=ROOT/'dist'/f"chatcounter-v{manifest['version']}-universal.zip";out.parent.mkdir(exist_ok=True)
 with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
