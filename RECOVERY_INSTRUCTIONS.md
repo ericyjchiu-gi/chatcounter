@@ -1,1 +1,0 @@
-This temporary file exists only to trigger a recovery commit and will be removed in the final tree.
