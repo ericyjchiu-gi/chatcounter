@@ -30,15 +30,18 @@
     if(reason==='retry')for(const key of manualKeys){
       if(seen.has(key))continue;const found=entryAt(s,key);if(found&&!['done','unchanged'].includes(found.item.status))return {...found,retryKey:key};
     }
-    if(s.recent){const t=C.nextRequired(s.recent);if(t)return {job:s.recent,...t};}
-    const allowed=reason!=='scheduled'||s.settings.autoResume;
-    if(allowed){
-      const j=C.firstStage(s);
-      if(j&&C.softUntil(s)<=C.now()){const t=C.nextRequired(j);if(t)return {job:j,...t};}
+    if(s.recent){
+      const required=C.nextRequired(s.recent);if(required)return {job:s.recent,...required};
+      const extra=C.nextOptional(s,s.recent);if(extra)return {job:s.recent,...extra};
     }
-    // Optional sources never prevent wider CORE history. During soft rests they rest too.
-    if(C.softUntil(s)<=C.now()&&(allowed||s.settings.auto))for(const j of C.jobs(s)){
-      const t=C.nextOptional(s,j);if(t)return {job:j,...t};
+    const allowed=reason!=='scheduled'||s.settings.autoResume;
+    const current=allowed?C.firstStage(s):null;
+    const burstPaused=(s.governor?.softPauseUntil||0)>C.now();
+    // Finish/attempt Project coverage for completed earlier stages before widening core history.
+    // Stage-transition rests delay the NEXT core stage, not the previous stage's Projects.
+    if(allowed&&!burstPaused){const prior=C.nextPriorOptional(s,current);if(prior)return prior;}
+    if(allowed&&current&&C.softUntil(s)<=C.now()){
+      const t=C.nextRequired(current);if(t)return {job:current,...t};
     }
     return null;
   }
@@ -173,7 +176,10 @@
       const s=await C.read(C.session.scope);if(!s.baseline.startedAt||s.paused||s.blocked||s.cooldownUntil>C.now())return;
       if(s.worker&&s.worker.owner!==C.owner&&s.worker.expiresAt>C.now())return;
       const recentDue=s.settings.auto&&s.watermark&&C.now()-s.watermark>=s.settings.interval*60000;
-      const j=C.firstStage(s),baselineDue=s.settings.autoResume&&C.softUntil(s)<=C.now()&&(!s.baseline.stages.length||j&&C.nextRequired(j)||C.jobs(s).some(j=>C.nextOptional(s,j)));
+      const j=C.firstStage(s),burstPaused=(s.governor?.softPauseUntil||0)>C.now();
+      const priorDue=!burstPaused&&!!C.nextPriorOptional(s,j);
+      const coreDue=!!j&&C.softUntil(s)<=C.now()&&!!C.nextRequired(j);
+      const baselineDue=s.settings.autoResume&&(!s.baseline.stages.length||priorDue||coreDue);
       if(recentDue||baselineDue)await C.run('scheduled');
     }catch(e){C.lastError=(e.code||'SYNC_ERROR')+': '+e.message;}
   }
