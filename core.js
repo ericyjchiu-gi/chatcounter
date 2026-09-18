@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   if (window.ChatCounter) return;
-  const C = window.ChatCounter = {version:'1.7.1', DAY:86400000, owner:crypto.randomUUID(), listeners:new Set()};
+  const C = window.ChatCounter = {version:'1.7.2', DAY:86400000, owner:crypto.randomUUID(), listeners:new Set()};
   C.now = () => Date.now();
   C.error = (code,message,extra={}) => Object.assign(new Error(message),{code,...extra});
   C.sleep = ms => new Promise(r=>setTimeout(r,ms));
