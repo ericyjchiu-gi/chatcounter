@@ -1,0 +1,29 @@
+name: Apply v1.8.0 bundle
+on:
+  push:
+    branches: [build-v1.8.0]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[assembled]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build-v1.8.0
+          fetch-depth: 0
+      - name: Apply and validate source bundle
+        run: |
+          cat .build/v180/part-00 .build/v180/part-01 .build/v180/part-rest | base64 -d > /tmp/v180.tgz
+          tar -xzf /tmp/v180.tgz -C .
+          rm -rf .build/v180
+          rm -f version173.js
+          python3 tools/package.py
+      - name: Commit assembled release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Release v1.8.0 [assembled]"
+          git push origin HEAD:build-v1.8.0
