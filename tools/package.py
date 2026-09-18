@@ -11,7 +11,8 @@ for block in manifest['content_scripts']:
 for name in ('tests/RESULTS.json','tests/STABILITY_172_RESULTS.json','tests/browser_regression.py','tests/stability_172.py'):
  names.add(name)
 blobs={name:(ROOT/name).read_bytes() for name in sorted(names)}
-commit=os.environ.get('CHATCOUNTER_COMMIT')
+git_commit=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True)
+commit=os.environ.get('CHATCOUNTER_COMMIT') or (git_commit.stdout.strip() if git_commit.returncode==0 else None)
 build={'version':manifest['version'],'commit':commit,'sha256':{n:hashlib.sha256(b).hexdigest() for n,b in blobs.items()}}
 blobs['BUILD.json']=(json.dumps(build,indent=2)+'\n').encode()
 out=ROOT/'dist'/f"chatcounter-v{manifest['version']}-universal.zip";out.parent.mkdir(exist_ok=True)
