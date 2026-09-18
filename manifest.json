@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
-  "version": "1.7.2",
-  "description": "Universal usage analytics with stage-aware Project coverage, resumable history, adaptive pacing, diagnostics and compact Sync & History.",
+  "version": "1.7.3",
+  "description": "Universal usage analytics with corrected Project discovery, resumable history, adaptive pacing, diagnostics and compact Sync & History.",
   "permissions": [
     "storage"
   ],
@@ -28,13 +28,19 @@
         "api.js",
         "tasks.js",
         "policy.js",
+        "version173.js",
         "sync.js",
         "live.js",
-        "ui.js",
-        "version172.js"
+        "ui.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
     }
-  ]
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
 }
