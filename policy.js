@@ -1,4 +1,4 @@
-/* v1.7.1 queue policy. All times and retry state persist; tokens/bodies never do. */
+/* v1.7.2 queue policy. All times and retry state persist; tokens/bodies never do. */
 (() => {
   'use strict'; const C=window.ChatCounter;
   C.sessionPace='auto'; C.currentStage='24h'; C.httpSamples=[];
@@ -102,6 +102,16 @@
   C.canRetry=e=>!( /SCHEMA|CURSOR|PAGE_CAP|AUTH|ACCOUNT|STORAGE|BRIDGE|LOCK/.test(e.code||''))&&e.status!=='blocked_source';
   C.retryRecords=s=>Object.entries(s.errors||{}).filter(([,e])=>C.canRetry(e));
   C.firstStage=s=>s.baseline.stages.find(j=>!C.stageTerminal(j));
+  // Project/optional work for an earlier stage gets one chance before wider core history.
+  // A shared source circuit or per-task backoff can defer it without blocking the next stage.
+  C.nextPriorOptional=(s,current=C.firstStage(s))=>{
+    const stages=s.baseline?.stages||[],index=current?stages.indexOf(current):stages.length,stop=index<0?stages.length:index;
+    for(let i=0;i<stop;i++){
+      const next=C.nextOptional(s,stages[i]);
+      if(next)return {job:stages[i],...next,priorStage:true};
+    }
+    return null;
+  };
   C.queueView=s=>{
     const now=C.now(),active=s.worker&&s.worker.expiresAt>now,j=C.firstStage(s),retry=C.retryRecords(s),soft=C.softUntil(s);
     const result=(action,label,disabled=false,reason='',until=0)=>({action,label,disabled,reason,until});
@@ -110,6 +120,8 @@
     if(s.blocked)return result(s.blocked==='AUTH_REQUIRED'?'reauth':'',s.blocked==='AUTH_REQUIRED'?'Recheck sign-in':'Needs attention',s.blocked!=='AUTH_REQUIRED',s.blocked);
     if(!s.baseline.startedAt)return result('start','Build history baseline');
     if(s.paused)return result('resume','Resume',false, 'Resume preserves server and scheduled cooldowns.');
+    const prior=C.nextPriorOptional(s,j),burstWait=(s.governor?.softPauseUntil||0)>now;
+    if(prior&&!burstWait)return result('resume','Resume '+prior.job.key+' Projects',false,prior.job.key+' Project coverage is attempted before wider core history.');
     if(soft>now&&j)return result('start-now','Start '+j.key+' now',false,'Scheduled soft wait; Start now skips only this wait.',soft);
     if(j&&C.nextRequired(j))return result('resume','Resume '+j.key+' backfill');
     if(retry.length)return result('retry','Retry '+retry.length+' error'+(retry.length===1?'':'s')+' once',false,'One manual attempt per failing target; a repeated error is logged and backed off.');
