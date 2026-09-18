@@ -16,13 +16,11 @@ jobs:
           node-version: '22'
       - name: Validate JavaScript and package committed source
         run: python3 tools/package.py
-      - name: Tag this packaged version without overwriting a tag
+      - name: Point the version tag at the validated release commit
         run: |
           VERSION=$(node -p "require('./manifest.json').version")
-          if ! git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
-            git tag "v${VERSION}"
-            git push origin "refs/tags/v${VERSION}"
-          fi
+          git tag -f "v${VERSION}" HEAD
+          git push --force origin "refs/tags/v${VERSION}"
       - uses: actions/upload-artifact@v4
         with:
           name: chatcounter-universal
