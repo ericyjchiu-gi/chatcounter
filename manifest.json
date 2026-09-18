@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
-  "version": "1.7.1",
-  "description": "Universal usage analytics with resumable history, source-aware retries, adaptive pacing, diagnostics and compact Sync & History.",
+  "version": "1.7.2",
+  "description": "Universal usage analytics with stage-aware Project coverage, resumable history, adaptive pacing, diagnostics and compact Sync & History.",
   "permissions": [
     "storage"
   ],
