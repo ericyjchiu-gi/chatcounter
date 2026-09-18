@@ -1,4 +1,4 @@
-# ChatCounter 1.7.1 — Universal
+# ChatCounter 1.7.2 — Universal
 
 A Chrome/Orion browser extension that reconstructs model usage from saved ChatGPT
 reply metadata. It is **not an official quota ledger**. One source tree and one flat
@@ -32,10 +32,20 @@ metadata table. No plan or quota balances are inferred from an empty cache.
 
 ## Acquisition and coverage
 
-Core regular/archived history is built 24h -> 7d -> 30d. Each stage's target has a
-fixed snapshot anchor. Projects have independent health; source failures do not
-stop core stages, but Project coverage stays explicitly incomplete. A core-complete
-stage is not the same as fully indexed history.
+Each baseline stage now runs **core first, then Projects, then wider core**:
+
+1. 24h regular + archived
+2. eligible 24h Projects
+3. 7d regular + archived
+4. eligible 7d Projects
+5. 30d regular + archived
+6. eligible 30d Projects
+
+If a Project source is under 5xx/network backoff or a shared circuit is open, it does
+not block wider core history. When it becomes eligible again, the older-stage Project
+task preempts at the next safe page boundary. Project coverage remains visibly
+incomplete until it succeeds; a core-complete stage is not the same as fully indexed
+history.
 
 A native account-scoped Web Lock excludes simultaneous scanners, with a separate
 store lock serializing writes. State, errors, jobs, pagination cursors and checkpoint
@@ -53,10 +63,11 @@ saved-history reconciliation. No chat message is sent by this extension.
 ## Pacing and recovery
 
 Default Auto pace uses at least 1.5s/request for 24h, 2.5s for 7d and 4s for 30d.
-Recent latency/failures can make it slower. Stages rest 2–5 minutes; a request budget
-also causes rests. Conservative and Fast modes are per-page-session overrides.
-Start now skips only a soft rest, not a server cooldown. These are client policies,
-not official API thresholds or a guarantee against 429.
+Recent latency/failures can make it slower. The 2–5 minute stage rest delays the next
+core stage, not healthy Project coverage for the stage just completed. Request-budget
+rests still pause all historical work. Conservative and Fast modes are per-page-
+session overrides. Start now skips only a soft rest, not a server cooldown. These are
+client policies, not official API thresholds or a guarantee against 429.
 
 5xx/network errors back off 10s -> 30s -> 2m -> 10m. Five repeated Project failures
 open a shared 30-minute source circuit. Retry errors once permits one safe manual
@@ -91,8 +102,8 @@ not current server-reported entitlements, and should not be treated as authorita
 - ui.js: dashboard, compact sync panel and exports
 - bridge.js: callback/Promise-compatible extension storage adapter
 
-Run `python tests/browser_regression.py` and `python tests/stability_171.py` with
+Run `python tests/browser_regression.py` and `python tests/stability_172.py` with
 Playwright and Chromium available. Run `python tools/package.py` for a deterministic
 flat ZIP. Test results are fixture-based, not a real-account or Orion/iPad certification.
 
-See RELEASE_NOTES_1.7.1.md for the full change list.
+See RELEASE_NOTES_1.7.2.md for the latest scheduling fix and RELEASE_NOTES_1.7.1.md for the prior stability release.
