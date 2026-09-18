@@ -30,7 +30,8 @@
         "policy.js",
         "sync.js",
         "live.js",
-        "ui.js"
+        "ui.js",
+        "version172.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
