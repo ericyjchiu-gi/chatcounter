@@ -1,0 +1,16 @@
+{
+  "version": "1.9.0",
+  "passed": 8,
+  "environment": "Offline Chromium DOM + mocked HTTP/storage/Web Locks",
+  "orion_device_test": false,
+  "checks": [
+    "Manifest has a stable development key and loads the v1.8.5 language/limit modules",
+    "Settings persist manual reset assumptions, browser/English/Chinese override and system/light/dark override",
+    "Healthy Sync & History collapses to one status-pill row; coverage cards remain expanded-only",
+    "Advanced Chat shows three plan cards in one row; trend contains a sliding 24h/7d/30d control and four usage KPIs",
+    "Plan logic supports Pro $200, Pro $100, Business Standard/Premium and deliberately infers no Plus cap",
+    "Portable index backup/restore preserves metadata and coverage while excluding chat text and authentication tokens",
+    "Recent reconciliation consumes the same 40-request Auto budget and stops at a shared rest boundary",
+    "15-minute refresh rotates four Projects per cycle, lowering a 16-Project account from ~21 to ~9 requests per refresh"
+  ]
+}

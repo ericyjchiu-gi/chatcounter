@@ -2,6 +2,7 @@ name: Validate and package
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
@@ -14,13 +15,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Validate JavaScript and package committed source
+      - name: Install package-validation dependency
+        run: python3 -m pip install Pillow
+      - name: Validate source, reference hashes, icons and release package
         run: python3 tools/package.py
-      - name: Point the version tag at the validated release commit
+      - name: Tag release without overwriting an existing tag
         run: |
           VERSION=$(node -p "require('./manifest.json').version")
-          git tag -f "v${VERSION}" HEAD
-          git push --force origin "refs/tags/v${VERSION}"
+          if git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            test "$(git rev-parse "v${VERSION}^{commit}")" = "$(git rev-parse HEAD)"
+          else
+            git tag "v${VERSION}"
+            git push origin "refs/tags/v${VERSION}"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: chatcounter-universal

@@ -1,0 +1,15 @@
+{
+  "version": "1.9.0",
+  "passed": 7,
+  "environment": "Offline Chromium DOM + mocked HTTP/storage and simulated Web Locks",
+  "orion_device_test": false,
+  "checks": [
+    "Fresh install opens a dedicated landing screen and sends zero history requests",
+    "Discovery-first indexing exposes a stable conversation denominator and non-linear 50% progress",
+    "Completed ranges become fully bright, remove minimum-count markers and collapse healthy sync status",
+    "Completed/shared state opens directly into the full dashboard across tabs",
+    "Projects discovery starts without cursor=0 and uses the corrected metadata-only sidebar query",
+    "HTTP 429 enforces Retry-After and a five-minute 45s/request recovery governor",
+    "Manifest ships transparent 16/32/48/128 extension icons"
+  ]
+}

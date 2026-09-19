@@ -49,16 +49,17 @@ async def main():
   await p.evaluate('ChatCounter.emit()');await p.wait_for_timeout(120)
   await p.locator('[data-collapse]').click()
   assert await p.locator('[data-coverage] .coverage').count()==3
-  assert await p.locator('[data-coverage]').is_visible() and not await p.locator('[data-facts]').is_visible()
+  assert not await p.locator('[data-coverage]').is_visible() and not await p.locator('[data-facts]').is_visible()
+  assert '24 HOURS' not in await p.locator('[data-sync]>summary').inner_text()
   await p.evaluate("ChatCounter.emit()");await p.wait_for_timeout(100)
   assert await p.locator('[data-collapse]').inner_text()=='Expand +'
   await p.screenshot(path=str(ROOT/'tests/dashboard-collapsed-172.png'),full_page=True)
-  ok('Explicit collapse leaves all 3 coverage cards visible; heartbeat does not reopen the body')
+  ok('Explicit collapse leaves one status-pill row; heartbeat does not reopen the body')
   await p.locator('[data-collapse]').click()
   await p.locator('summary').filter(has_text='Diagnostics & maintenance').click()
   async with p.expect_download() as item:await p.locator('[data-export-diag]').click()
   d=await item.value;download=await d.path();data=json.loads(Path(download).read_text())
-  assert data['version']=='1.7.2' and 'recentLog' in data and 'events' not in data
+  assert data['version']==json.loads((ROOT/'manifest.json').read_text())['version'] and 'recentLog' in data and 'events' not in data
   assert 'FAKE_TOKEN' not in json.dumps(data) and 'DO_NOT_STORE_BODY' not in json.dumps(data)
   ok('Export diagnostics.json downloads structured metadata and request/checkpoint log without token/body')
   await CWRITE(p,"s.cooldownUntil=ChatCounter.now()+60000")
@@ -120,18 +121,19 @@ async def main():
    const t=j.sources[2];t.status='error';t.attempts=7;t.nextAt=ChatCounter.now()+640000;
    s.errors['24h/source/projects:']={stage:'24h',source:'projects',code:'SERVER_ERROR',httpStatus:500,attempts:7,lastAttempt:ChatCounter.now(),nextRetryAt:t.nextAt,status:'error',message:'History endpoint returned HTTP 500.'};
    s.events.keep={id:'keep',t:ChatCounter.now()-1000,model:'gpt-6-pro',effort:'',cid:'known'};
-   delete s.policyVersion;""")
+   delete s.policyVersion;delete s.projectSidebarVersion;""")
   s1=await state(p);await p.evaluate('__advance+=10000');s2=await state(p)
-  assert s1['baseline']['stages'][0]['status']=='complete_with_warnings'
-  assert s1['baseline']['stages'][0]['sources'][2]['nextAt']==s2['baseline']['stages'][0]['sources'][2]['nextAt']
-  assert s1['errors']['24h/source/projects:']['status']=='degraded' and 'keep' in s1['events']
-  ok('Existing seven-attempt Project500 checkpoint migrates without deleting data or sliding retry deadline')
+  source=s1['baseline']['stages'][0]['sources'][2]
+  assert source['status']=='pending' and source['attempts']==0 and source['cursor']==''
+  assert '24h/source/projects:' not in s1['errors'] and 'keep' in s1['events']
+  assert s2['projectSidebarVersion']==2
+  ok('Stale pre-fix Project500 checkpoint is safely requeued with cached data retained')
   gaps=await p.evaluate("""()=>{const s=ChatCounter.fresh();s.governor={health:[]};const a=ChatCounter.requestGap(s,'24h'),b=ChatCounter.requestGap(s,'7d'),c=ChatCounter.requestGap(s,'30d');ChatCounter.setPace('fast');s.governor.health=[{t:ChatCounter.now(),status:500,latency:10},{t:ChatCounter.now(),status:500,latency:10}];return {a,b,c,slow:ChatCounter.requestGap(s,'30d')}}""")
   assert gaps['a']<gaps['b']<gaps['c'] and gaps['slow']>=5000
   ok('Default older stages are slower; shared failure health slows even a Fast override')
   await ctx.close()
   await browser.close()
- report={'version':'1.7.2','passed':len(checks),'environment':'Offline Chromium DOM + mocked HTTP/storage and simulated Web Locks','orion_device_test':False,'checks':checks}
+ report={'version':json.loads((ROOT/'manifest.json').read_text())['version'],'passed':len(checks),'environment':'Offline Chromium DOM + mocked HTTP/storage and simulated Web Locks','orion_device_test':False,'checks':checks}
  (ROOT/'tests/STABILITY_172_RESULTS.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
 async def CWRITE(p,body):await p.evaluate('ChatCounter.write(ChatCounter.session.scope,s=>{'+body+'})')
 if __name__=='__main__':asyncio.run(main())

@@ -30,17 +30,21 @@
     if(reason==='retry')for(const key of manualKeys){
       if(seen.has(key))continue;const found=entryAt(s,key);if(found&&!['done','unchanged'].includes(found.item.status))return {...found,retryKey:key};
     }
-    if(s.recent){
+    const burstPaused=(s.governor?.softPauseUntil||0)>C.now();
+    if(s.recent&&!burstPaused){
       const required=C.nextRequired(s.recent);if(required)return {job:s.recent,...required};
       const extra=C.nextOptional(s,s.recent);if(extra)return {job:s.recent,...extra};
     }
     const allowed=reason!=='scheduled'||s.settings.autoResume;
     const current=allowed?C.firstStage(s):null;
-    const burstPaused=(s.governor?.softPauseUntil||0)>C.now();
     // Finish/attempt Project coverage for completed earlier stages before widening core history.
     // Stage-transition rests delay the NEXT core stage, not the previous stage's Projects.
     if(allowed&&!burstPaused){const prior=C.nextPriorOptional(s,current);if(prior)return prior;}
     if(allowed&&current&&C.softUntil(s)<=C.now()){
+      // Initialisation is discovery-first: finish the lightweight conversation
+      // inventory before reading message pages, so the UI can expose a stable
+      // conversation-count denominator as early as the source allows.
+      const discovery=C.nextDiscovery(s,current);if(discovery)return {job:current,...discovery};
       const t=C.nextRequired(current);if(t)return {job:current,...t};
     }
     return null;
@@ -58,15 +62,15 @@
     C.log(s,'core-stage-complete',{stage:j.key,status:j.status});
     if(j.key==='24h'&&!s.watermark)s.watermark=j.end;
     if(j.key==='recent'){s.watermark=j.end;s.lastResult={...C.counts(j),at:C.now()};return;}
-    s.governor.burstCount=0;
     if(j.key!=='30d'){
       s.governor.stageDelayUntil=C.now()+stageDelay();
       C.log(s,'stage-rest',{stage:j.key,until:s.governor.stageDelayUntil});
     }
   }
   function budget(s,stage){
-    if(stage==='recent')return;
-    const limit=C.sessionPace==='conservative'?40:C.sessionPace==='fast'?100:60;
+    // Shared account-level request budget: recent reconciliation and baseline
+    // backfill consume the same inferred history-endpoint bucket.
+    const limit=C.sessionPace==='conservative'?25:C.sessionPace==='fast'?55:40;
     if(s.governor.burstCount>=limit){
       s.governor.softPauseUntil=C.now()+stageDelay();s.governor.burstCount=0;
       C.log(s,'budget-rest',{stage,count:limit,until:s.governor.softPauseUntil});
@@ -173,7 +177,7 @@
   async function tick(){
     C.localHeartbeat=C.now();C.emit();if(document.visibilityState==='hidden'||C.running||!C.session)return;
     try{
-      const s=await C.read(C.session.scope);if(!s.baseline.startedAt||s.paused||s.blocked||s.cooldownUntil>C.now())return;
+      const s=await C.read(C.session.scope);if(!s.baseline.startedAt||s.paused||s.blocked||s.cooldownUntil>C.now()||(s.governor?.softPauseUntil||0)>C.now())return;
       if(s.worker&&s.worker.owner!==C.owner&&s.worker.expiresAt>C.now())return;
       const recentDue=s.settings.auto&&s.watermark&&C.now()-s.watermark>=s.settings.interval*60000;
       const j=C.firstStage(s),burstPaused=(s.governor?.softPauseUntil||0)>C.now();

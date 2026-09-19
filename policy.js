@@ -1,4 +1,4 @@
-/* v1.7.2 queue policy. All times and retry state persist; tokens/bodies never do. */
+/* v1.8 queue policy. All times and retry state persist; tokens/bodies never do. */
 (() => {
   'use strict'; const C=window.ChatCounter;
   C.sessionPace='auto'; C.currentStage='24h'; C.httpSamples=[];
@@ -16,13 +16,30 @@
   };
   C.normalize=s=>{
     s.settings={...C.defaults(),...s.settings};s.log=Array.isArray(s.log)?s.log.slice(-200):[];
-    s.sourceHealth=s.sourceHealth||{};s.governor={stageDelayUntil:0,softPauseUntil:0,burstCount:0,lastRequestAt:0,health:[],...s.governor};
+    s.sourceHealth=s.sourceHealth||{};s.governor={stageDelayUntil:0,softPauseUntil:0,burstCount:0,lastRequestAt:0,recoveryUntil:0,projectRotation:0,projectBatchSize:4,health:[],...s.governor};
     s.governor.health=(s.governor.health||[]).filter(x=>x.t>=C.now()-300000).slice(-30);
+    if((s.settings.resetDay===''||s.settings.resetDay==null)&&s.settings.resetLocal){
+      const legacy=new Date(s.settings.resetLocal);if(Number.isFinite(legacy.getTime())){s.settings.resetDay=String(legacy.getDay());s.settings.resetTime=legacy.toTimeString().slice(0,5);}
+    }
     // Migrate both 1.7.0 and early 1.7.1 checkpoints once; never extend deadlines on each read.
     if(s.policyVersion!==171){
       s.governor.stageDelayUntil=Math.max(s.governor.stageDelayUntil,s.baseline.stageDelayUntil||0);
       s.governor.softPauseUntil=Math.max(s.governor.softPauseUntil,s.baseline.softPauseUntil||0);
       s.policyVersion=171;
+    }
+    // v1.7.3 corrected the Projects sidebar first-page request. Requeue only
+    // never-successful sidebar tasks; cached replies and per-Project progress stay intact.
+    if(s.projectSidebarVersion!==2){
+      let reset=0;
+      for(const j of C.jobs(s))for(const t of j.sources||[]){
+        if(t.kind!=='projects'||(t.pages||0)>0)continue;
+        t.cursor='';
+        if(['error','degraded','blocked_source','unavailable'].includes(t.status))t.status='pending';
+        t.attempts=0;t.nextAt=0;
+        delete s.errors[C.errorKey(j,t,'source')];reset++;
+      }
+      delete s.sourceHealth.projects;s.projectSidebarVersion=2;
+      if(reset)C.log(s,'project-sidebar-upgrade',{count:reset,reason:'correct-first-page-query'});
     }
     for(const j of C.jobs(s)){
       for(const t of C.entries(j)){
@@ -60,7 +77,21 @@
       warnings:all.filter(t=>!good(t)&&optional(t)).length,coreErrors:all.filter(t=>['error','unavailable'].includes(t.status)&&!optional(t)).length,
       discoveryDone:sources.filter(t=>!optional(t)).every(good),coreComplete:all.filter(t=>!optional(t)).every(good),fullDiscoveryDone:sources.every(good)};
   };
+  C.stageMetrics=(s,key)=>{
+    const j=(s.baseline?.stages||[]).find(x=>x.key===key),n=C.counts(j),indexed=n.done+n.unchanged,total=n.discovered;
+    const percent=total?Math.max(0,Math.min(100,Math.round(indexed/total*100))):0;
+    return {job:j,...n,indexed,total,percent,complete:j?.status==='complete',coreComplete:!!n.coreComplete,discoveryComplete:!!n.fullDiscoveryDone,
+      discovering:!!j&&!n.fullDiscoveryDone&&n.sourcePending>0,knownOnly:!!j&&!n.fullDiscoveryDone&&n.discoveryDone};
+  };
+  C.activeBaselineStage=s=>{
+    const active=s.worker?.stage&&s.baseline.stages.find(j=>j.key===s.worker.stage);return active||C.firstStage(s)||s.baseline.stages[2]||null;
+  };
   C.due=t=>['pending','error','degraded'].includes(t.status)&&(!t.nextAt||t.nextAt<=C.now());
+  C.nextDiscovery=(s,j)=>{
+    const required=(j?.sources||[]).find(t=>!optional(t)&&C.due(t));if(required)return {type:'source',item:required};
+    const extra=(j?.sources||[]).find(t=>optional(t)&&C.due(t)&&!(s.sourceHealth[C.circuitKey(t)]?.until>C.now()));
+    return extra?{type:'source',item:extra}:null;
+  };
   C.nextRequired=j=>{
     const t=Object.values(j.tasks||{}).find(t=>!optional(t)&&C.due(t));if(t)return {type:'chat',item:t};
     const source=j.sources.find(t=>!optional(t)&&C.due(t));return source?{type:'source',item:source}:null;
@@ -86,7 +117,11 @@
     if(ck&&retryable)s.sourceHealth[ck]={until:t.nextAt,attempts:t.attempts,code,httpStatus:status};
     const key=C.errorKey(j,t,type);
     s.errors[key]={stage:j.key,conversationId:type==='chat'?t.id:null,source:type==='source'?t.kind:null,optional:t.optional,code,httpStatus:status,attempts:t.attempts,lastAttempt:C.now(),retryAfterMs:wait,nextRetryAt:t.nextAt,status:t.status,message:String(e.message).slice(0,180)};
-    if(status===429)s.cooldownUntil=Math.max(s.cooldownUntil||0,C.now()+wait);
+    if(status===429){
+      s.cooldownUntil=Math.max(s.cooldownUntil||0,C.now()+wait);
+      s.governor.recoveryUntil=Math.max(s.governor.recoveryUntil||0,C.now()+5*60000);
+      s.governor.burstCount=0;
+    }
     if(schema&&!t.optional||['AUTH_REQUIRED','ACCOUNT_CHANGED','STORAGE_ERROR','STORAGE_READBACK_FAILED','STORAGE_TIMEOUT'].includes(code))s.blocked=code;
     C.log(s,'task-error',{stage:j.key,target:type==='chat'?'conversation':t.kind,code,httpStatus:status,attempts:t.attempts,status:t.status,until:t.nextAt,optional:t.optional});C.refreshJob(j);
   };
@@ -94,7 +129,8 @@
     const base=C.sessionPace==='fast'?1000:C.sessionPace==='conservative'?{ '24h':3000,'7d':5000,'30d':8000,recent:3000}[stage]||3000:{'24h':1500,'7d':2500,'30d':4000,recent:1500}[stage]||2500;
     const h=(s.governor?.health||[]).filter(x=>x.t>=C.now()-300000).slice(-10),fail=h.filter(x=>x.status===0||x.status>=500).length;
     const lat=h.length?h.reduce((n,x)=>n+x.latency,0)/h.length:0;
-    return Math.max(base,fail>=2?5000:fail||lat>2500?3000:base);
+    const recovery=(s.governor?.recoveryUntil||0)>C.now()?45000:0;
+    return Math.max(base,recovery,fail>=2?5000:fail||lat>2500?3000:base);
   };
   C.setPace=pace=>{C.sessionPace=['auto','conservative','fast'].includes(pace)?pace:'auto';C.emit();return C.sessionPace;};
   C.noteRequest=(status,latency)=>{C.httpSamples.push({t:C.now(),status,latency});C.httpSamples=C.httpSamples.slice(-30);};
@@ -118,7 +154,7 @@
     if(active)return result('','Syncing '+(s.worker.stage||'')+'…',true,'A scanner is active.');
     if(s.cooldownUntil>now)return result('','Server cooldown · '+Math.ceil((s.cooldownUntil-now)/1000)+'s',true,'HTTP 429: cannot override Retry-After.',s.cooldownUntil);
     if(s.blocked)return result(s.blocked==='AUTH_REQUIRED'?'reauth':'',s.blocked==='AUTH_REQUIRED'?'Recheck sign-in':'Needs attention',s.blocked!=='AUTH_REQUIRED',s.blocked);
-    if(!s.baseline.startedAt)return result('start','Build history baseline');
+    if(!s.baseline.startedAt)return result('start','Start indexing');
     if(s.paused)return result('resume','Resume',false, 'Resume preserves server and scheduled cooldowns.');
     const prior=C.nextPriorOptional(s,j),burstWait=(s.governor?.softPauseUntil||0)>now;
     if(prior&&!burstWait)return result('resume','Resume '+prior.job.key+' Projects',false,prior.job.key+' Project coverage is attempted before wider core history.');
@@ -130,7 +166,7 @@
     return result('reconcile','Reconcile now');
   };
   C.diagnostics=(s,status='')=>({version:C.version,exportedAt:new Date().toISOString(),status,nativeLocks:!!navigator.locks?.request,plan:{type:s.plan.raw,label:s.plan.label},
-    baseline:s.baseline.stages.map(j=>({key:j.key,status:j.status,...C.counts(j)})),worker:s.worker,lastCheckpoint:s.lastCheckpoint,watermark:s.watermark,
-    cooldownUntil:s.cooldownUntil,softPauseUntil:C.softUntil(s),pace:C.sessionPace,errors:s.errors,sourceHealth:s.sourceHealth,
+    baseline:s.baseline.stages.map(j=>({key:j.key,status:j.status,...C.counts(j),progress:C.stageMetrics(s,j.key).percent})),worker:s.worker,lastCheckpoint:s.lastCheckpoint,watermark:s.watermark,
+    cooldownUntil:s.cooldownUntil,softPauseUntil:C.softUntil(s),recoveryUntil:s.governor?.recoveryUntil||0,pace:C.sessionPace,budget:{count:s.governor?.burstCount||0,projectBatchSize:s.governor?.projectBatchSize||4,projectRotation:s.governor?.projectRotation||0},errors:s.errors,sourceHealth:s.sourceHealth,
     cacheStats:{conversations:Object.keys(s.conversations).length,replies:Object.keys(s.events).length},recentLog:s.log.slice(-200),lastError:C.lastError||''});
 })();
