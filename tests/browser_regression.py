@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]
-FILES=['bridge.js','core.js','api.js','tasks.js','policy.js','sync.js','live.js','ui.js']
+FILES=['bridge.js','core.js','i18n.js','limits.js','api.js','tasks.js','policy.js','sync.js','live.js','ui.js']
 MOCK=r'''(() => {
  const listeners=[];
  if(!crypto.randomUUID)crypto.randomUUID=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
@@ -110,8 +110,8 @@ async def finish_baseline(p):
 async def state(p):return await p.evaluate('ChatCounter.read(ChatCounter.session.scope)')
 async def action(p,a):return await p.evaluate('(a)=>ChatCounter.control(a)',a)
 async def open_ui(p):
- await p.locator('#chatcounter-launcher').click();await p.wait_for_function("document.querySelector('#chatcounter-v17')?.shadowRoot.querySelector('[data-plan]')?.textContent==='Pro 20x'");await p.wait_for_timeout(100)
-async def text(p,sel):return await p.locator('#chatcounter-v17').locator(sel).inner_text()
+ await p.locator('#chatcounter-launcher').click();await p.wait_for_function("document.querySelector('#chatcounter-v185')?.shadowRoot.querySelector('[data-plan]')?.textContent==='Pro 20x'");await p.wait_for_timeout(100)
+async def text(p,sel):return await p.locator('#chatcounter-v185').locator(sel).inner_text()
 async def main():
  checks=[]
  def ok(t):checks.append(t);print('PASS',t,flush=True)
@@ -119,10 +119,14 @@ async def main():
   browser=await pw.chromium.launch(executable_path='/usr/bin/chromium',headless=True,args=['--no-sandbox'])
   f=Fixture();ctx=await f.ctx(browser);p=await page(ctx);errs=[];p.on('pageerror',lambda e:errs.append(str(e)))
   await open_ui(p)
-  assert not f.histories();assert await p.locator('[data-range="24h"]').get_attribute('class')=='on'
-  assert await p.locator('[data-sync]').get_attribute('open') is not None
-  ok('Initial open: no history request, 24h selected, unified Sync & History expanded')
-  await action(p,'start');s=await finish_baseline(p)
+  panel=p.locator('#chatcounter-v185')
+  assert not f.histories();assert await panel.locator('[data-landing]').is_visible();assert not await panel.locator('[data-dashboard]').is_visible()
+  assert not (await state(p))['settings']['live'] and (await state(p))['settings']['auto'] and (await state(p))['settings']['interval']==15
+  ok('First open: landing screen only, no history request, live capture off and 15-minute backend reconciliation default')
+  await panel.locator('[data-start-indexing]').click();await p.wait_for_timeout(100)
+  assert await panel.locator('[data-dashboard]').is_visible();assert await panel.locator('[data-range="24h"]').get_attribute('class')=='on'
+  assert await panel.locator('[data-sync]').get_attribute('open') is not None
+  s=await finish_baseline(p)
   assert [x['status'] for x in s['baseline']['stages']]==['complete']*3,s
   assert len(s['events'])==4,s['events']
   assert f.details().count('/backend-api/conversations/chat-a:older')==1,f.details()
@@ -133,16 +137,17 @@ async def main():
   await p.screenshot(path=str(ROOT/'tests/dashboard-healthy.png'),full_page=True)
   ok('Healthy completed baseline collapses automatically; chart and cache remain visible')
   before=len(f.histories());await p.locator('[data-close]').click();await open_ui(p);assert len(f.histories())==before
-  p2=await page(ctx);await open_ui(p2);assert len((await state(p2))['events'])==4;assert 'Build history baseline' not in await text(p2,'[data-action="main"]');assert len(f.histories())==before
+  p2=await page(ctx);await open_ui(p2);assert len((await state(p2))['events'])==4;assert not await p2.locator('#chatcounter-v185').locator('[data-landing]').is_visible();assert len(f.histories())==before
   ok('Panel reopen and new tab share saved baseline status without starting a scan')
   before=len(f.details());await action(p,'reconcile');assert len(f.details())==before,f.details()
   ok('Unchanged conversations: headers reconciled; zero extra message-detail fetches')
-  # Dedupe, live event merge, and settings persistence.
+  # Dedupe, optional live event merge, and settings persistence.
+  await p.evaluate("ChatCounter.write(ChatCounter.session.scope,s=>{s.settings.live=true})")
   await p.evaluate("fetch('/backend-api/conversation',{method:'POST',body:'{}'})")
-  await p.wait_for_function("ChatCounter.read(ChatCounter.session.scope).then(s=>!!s.events.live1)")
+  await p.wait_for_function("async()=>!!(await ChatCounter.read(ChatCounter.session.scope)).events.live1")
   await p.evaluate("fetch('/backend-api/conversation',{method:'POST',body:'{}'})")
   await p.wait_for_timeout(200);assert len((await state(p))['events'])==5
-  ok('Passive completed reply capture persists metadata and deduplicates the same message ID')
+  ok('Optional passive live capture persists metadata and deduplicates the same message ID')
   # One actual 429; remaining queued work is never called or counted as failed.
   f.second=True;f.u=f.now+10000;f.fail['chat-a']=429;f.calls.clear();await action(p,'reconcile');s=await state(p)
   assert len(s['errors'])==1,s['errors'];assert s['cooldownUntil']>time.time()*1000
@@ -162,9 +167,10 @@ async def main():
   # In-flight cross-tab handover simulates browser Web Locks.
   f=Fixture();f.gate=asyncio.Event();ctx=await f.ctx(browser);p=await page(ctx)
   await p.evaluate("void ChatCounter.control('start')")
-  await p.wait_for_function("ChatCounter.read(ChatCounter.session.scope).then(s=>s.worker?.activity==='Reading reply metadata')")
+  await p.wait_for_function("async()=>((await ChatCounter.read(ChatCounter.session.scope)).worker?.activity==='Reading reply metadata')")
   p2=await page(ctx);await open_ui(p2)
   assert 'Another ChatGPT tab' in await text(p2,'[data-facts]')
+  await p.wait_for_timeout(200)
   n=len(f.histories());r=await action(p2,'resume');assert r=={'busy':True},r;assert len(f.histories())==n
   ok('Second tab sees shared in-progress state and cannot obtain the active native scan lock')
   r=await p2.evaluate("ChatCounter.control('rebuild').catch(e=>e.code)");assert r=='SYNC_ACTIVE';assert len(f.histories())==n
@@ -215,7 +221,7 @@ async def main():
   ok('Account switch selects an isolated cache and updates detected plan rather than assuming Pro')
   await ctx.close();await browser.close()
 
- report={'version':'1.7.1','passed':len(checks),'environment':'Chromium / mocked extension storage + ChatGPT HTTP; simulated Web Locks','orion_device_test':False,'checks':checks}
+ report={'version':json.loads((ROOT/'manifest.json').read_text())['version'],'passed':len(checks),'environment':'Chromium / mocked extension storage + ChatGPT HTTP; simulated Web Locks','orion_device_test':False,'checks':checks}
  (ROOT/'tests/RESULTS.json').write_text(json.dumps(report,indent=2)+'\n')
  print(json.dumps(report,indent=2))
 if __name__=='__main__':asyncio.run(main())
