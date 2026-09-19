@@ -1,0 +1,35 @@
+name: Verify release source recovery
+on:
+  push:
+    branches: [release-v1.9.0]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate archived source bundle
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,gzip,hashlib,io,tarfile,zipfile,json
+          parts=sorted(Path('.build/recovery').glob('part-*'))
+          for p in parts: print(p.name, len(p.read_bytes()))
+          raw=''.join(''.join(p.read_text().split()) for p in parts)
+          data=base64.b64decode(raw,validate=True)
+          data=gzip.decompress(data)
+          out=Path('recovered-source.zip')
+          with tarfile.open(fileobj=io.BytesIO(data),mode='r:') as t,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+            for m in t.getmembers():
+              if not m.isfile(): continue
+              name=m.name.removeprefix('./')
+              if name.startswith('/') or '..' in Path(name).parts: raise ValueError('unsafe archive path')
+              b=t.extractfile(m).read()
+              print(name,hashlib.sha256(b).hexdigest(),len(b))
+              z.writestr(name,b)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recovered-source
+          path: recovered-source.zip
