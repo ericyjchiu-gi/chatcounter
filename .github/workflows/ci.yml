@@ -1,0 +1,35 @@
+name: Validate and package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+      - name: Run current tests
+        run: python tools/test.py
+      - name: Build deterministic extension package
+        run: python tools/package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chatcounter-v2.0.1-universal
+          path: dist/chatcounter-v2.0.1-universal.zip
