@@ -25,10 +25,18 @@ jobs:
           test -f /tmp/chatcounter-clean/README.md
           test -f /tmp/chatcounter-clean/src/background/worker-store.js
 
+      - name: Preserve bootstrap workflows
+        run: |
+          mkdir -p /tmp/bootstrap-workflows
+          cp -a .github/workflows/. /tmp/bootstrap-workflows/
+
       - name: Replace repository with v2.0.1 clean tree
         run: |
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a /tmp/chatcounter-clean/. .
+          rm -rf .github/workflows
+          mkdir -p .github/workflows
+          cp -a /tmp/bootstrap-workflows/. .github/workflows/
 
       - uses: actions/setup-node@v4
         with:
