@@ -1,3 +1,22 @@
+# Build output
 dist/
+BUILD.json
+*.zip
+
+# Python
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# JavaScript
+node_modules/
+
+# Generated test artifacts
 tests/*.png
+tests/results/*.tmp
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

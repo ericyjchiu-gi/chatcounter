@@ -1,94 +1,111 @@
-# ChatCounter 1.9.0 — Universal
+# ChatCounter 2.0.1
 
-A Chrome/Orion extension for exploring **locally recorded ChatGPT usage**. It indexes saved assistant-reply metadata, not OpenAI's private quota ledger. This repository and its flat-root installation ZIP contain the same runtime source.
+Private, local **saved-history usage estimates** for ChatGPT. ChatCounter reconstructs usage from completed assistant-reply metadata in saved ChatGPT conversations. It is not an official OpenAI quota ledger and does not inspect Codex allowances.
 
-## What's changed since 1.8.5
+## Current release
 
-**One layout change:** Raw Model Metadata is now its own collapsible block below Advanced Chat Usage & Limits. It starts closed and has an explicit Expand/Collapse button. The table, selected-range filtering and metadata CSV export are unchanged.
+**2.0.1** replaces the page-only dashboard with a real Chrome toolbar popup and a single background acquisition engine.
 
-Sync & History remains first. Advanced Chat Usage & Limits retains its three quota bars, segmented range control, four usage cards, chart, colours and interactions. Settings, language/theme controls, indexing and quota calculations have not been redesigned.
+- Native 500px popup available from any browser page
+- Cached dashboard opens without requiring a ChatGPT tab
+- Background indexing continues after the popup closes
+- 24h / 7d / 30d staged indexing, archived chats and Project conversations
+- Plan-aware Advanced Chat estimates and a readable toolbar percentage badge
+- Incremental reconciliation, shared pacing, Retry-After handling and recovery mode
+- English / 中文 and light / dark / system appearance
+- Local metadata backup, restore, diagnostics and CSV export
 
-The public manifest key, storage keys and schema are the **same as the supplied 1.8.5 ZIP**. Returning users with readable local data open the dashboard directly. Neither a welcome screen nor another indexing step is added.
+See [CHANGELOG.md](CHANGELOG.md) and [docs/releases/2.0.1.md](docs/releases/2.0.1.md).
 
-## Updating without losing your index
+## Install or update without losing data
 
-### Chrome Developer Mode — recommended
+### First installation
 
-1. Before changing installations, use **Settings → Export local index** as a backup.
-2. **Do not click Remove.** Close ChatGPT tabs to avoid mixing old and new content scripts while updating.
-3. Extract the new ZIP and replace the files **inside the existing extension folder**. Keep the same folder path. `manifest.json` must be directly inside it, not in a nested version folder.
-4. Open `chrome://extensions` and click **Reload** on ChatGPT Message Meter.
-5. Reopen ChatGPT and click **Meter**. Existing complete or partial indexes bypass Start Indexing; only normal configured reconciliation may run.
+1. Extract the release ZIP into a permanent folder.
+2. Open `chrome://extensions` and enable **Developer mode**.
+3. Choose **Load unpacked** and select the folder containing `manifest.json`.
+4. Pin ChatCounter from Chrome's Extensions menu.
 
-For the first installation, enable Developer mode, choose **Load unpacked**, then select that folder.
+### Upgrade
 
-### Fixed extension ID
+1. Export a local-index backup from **Settings** as a precaution.
+2. Close existing ChatGPT tabs so old page scripts stop running.
+3. Replace files inside the **same unpacked extension folder**.
+4. Open `chrome://extensions` and click **Reload**.
+5. Do not click **Remove** unless you intend to delete extension-local storage.
 
-The shipped public key produces this Chrome development ID:
+The public manifest key, extension ID `ffnaboibekmfpegifameabebgpjpdpnn`, `cmm_v17_state_*` keys and schema 3 are intentionally unchanged.
+
+## How it works
 
 ```text
-ffnaboibekmfpegifameabebgpjpdpnn
+Toolbar popup / page fallback
+            │
+            ▼
+Background service worker ──► chrome.storage.local
+            │
+            ├─ direct read-only ChatGPT history requests
+            └─ isolated ChatGPT-tab transport fallback
 ```
 
-The key is retained, not regenerated per release. It keeps the development ID consistent across folders. It does **not** perform automatic ZIP installation, reach into another browser/profile, or keep data after uninstalling. Same-folder replacement plus Reload is still the recommended update path.
+The popup is read-only. One background engine owns history requests and state mutations. Work is checkpointed and resumed through Chrome alarms; closing the popup does not cancel it. Optional live capture is off by default and forwards only completed-reply metadata.
 
-An older keyless build may have a different ID. Export from the old installation before changing identities, then import using the same ChatGPT account. Never enable two different-ID copies at once.
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Chrome documentation: [manifest key](https://developer.chrome.com/docs/extensions/reference/manifest/key) and [extension storage](https://developer.chrome.com/docs/extensions/reference/api/storage). Chrome removes extension-local storage on uninstall. If it was removed without a backup, re-indexing is necessary; a stable key cannot recover deleted storage.
+## Percentage semantics
 
-### Orion
+The badge shows the **highest applicable estimated utilisation**, not an official remaining balance. For the inherited Pro $200 reference configuration:
 
-Use the same ZIP, with `manifest.json` at its root. Prefer Orion's in-place update mechanism where available. Export the index before replacing an installation. Orion/iPad update behaviour requires device testing; a matching Chrome ID is not proof of Orion storage retention.
+```text
+max(GPT-6 Pro weekly / 200,
+    GPT-5.6 Pro rolling 24h / 170,
+    combined Pro rolling 24h / 200)
+```
 
-## First run and returning users
+Shared plans use their combined pool. No numeric badge is shown until all baseline ranges and Project discovery are complete. Unsupported or unknown allowances remain neutral. Daily figures are rolling 24-hour counts; weekly figures use the manual reset anchor when configured, otherwise rolling seven days.
 
-A new account with no locally stored index sees the landing page. Clicking **Start Indexing** opens the full dashboard and starts history acquisition. Opening the landing page can check the signed-in session, but does not enumerate history.
+## Accuracy and limitations
 
-Complete, partial, paused, imported or migrated indexes open the dashboard instead. A paused index remains paused. A stale index is eligible for the normal configured refresh, not a forced rebuild. An unreadable store must not be interpreted as a recoverable deleted database.
+- Archived conversations are explicitly indexed.
+- Chats deleted before ChatCounter observed them cannot be reconstructed.
+- Temporary chats and some failed generations may be absent.
+- Deleting a chat after capture does not automatically erase its previously observed usage.
+- Backend endpoints and plan-limit presets are undocumented and can change.
+- Exact provider remaining is always unknown.
 
-## Interface
+## Privacy and permissions
 
-1. **Sync & History** — always at the top; one status-pill row when collapsed. Expand for coverage, progress, queue, worker heartbeat, pacing, errors and diagnostics.
-2. **Advanced Chat Usage & Limits** — reference quota bars stay on their configured windows. The 24h/7d/30d segmented control changes the usage cards and chart, not those quota windows.
-3. **Raw Model Metadata** — separate block, closed by default. Expand to inspect the existing model/effort table and export metadata CSV.
-4. **Settings** — opened from the header; weekly reset assumptions/timezone, browser-default or manual English/Chinese, system/light/dark appearance, index backup/restore.
+Stored locally: message/conversation IDs, timestamps, model and effort labels, coverage proofs, checkpoints, settings and allowlisted diagnostics.
 
-The quota configurations are inherited from 1.8.5 and are not new entitlement research. Exact provider balance is unknown. No Plus allowance is extrapolated from subscription multipliers.
+Not stored: chat text, access tokens, raw response bodies or request headers.
 
-## Indexing and ongoing sync — unchanged
+Permissions are limited to `storage`, `alarms`, and `https://chatgpt.com/*`. See [docs/PRIVACY.md](docs/PRIVACY.md).
 
-History acquisition widens through 24 hours, 7 days and 30 days, including regular, archived and eligible Project sources. Conversation-count progress is not a time estimate: large conversations can hold a percentage for longer. A failed source remains a coverage gap rather than a false success.
+## Repository layout
 
-Unchanged conversations are skipped only when their update timestamp and proven coverage allow it. Wider periods can require older pages. Native Web Locks serialize scanners and storage writes; successful pages are checkpointed so another active tab can resume.
+```text
+manifest.json               Extension manifest and stable identity
+service-worker.js           Background controller / scheduler / badge
+popup.html, popup.css       Native toolbar popup entry
+src/shared/                 Shared model, policy, API and scheduling modules
+src/background/             Background-only storage adapter
+src/content/                Page transport, optional live capture and dashboard UI
+assets/icons/               Manifest icons
+docs/                       Architecture, privacy, testing and release history
+tests/                      Current 2.0.1 regression harness only
+tools/                      Test and deterministic packaging commands
+.github/workflows/          CI validation and package artifact
+```
 
-Defaults remain backend reconciliation every **15 minutes**, experimental instant live capture **off**, and reconcile-on-open **off**. Recent refresh rotates four Projects per cycle; a Project can therefore lag one interval. All suspended/closed tabs mean work waits for an active tab.
+Historical tests and generated reports were removed from the active tree; Git history remains the source of record. Historical release notes live under [docs/releases/archive](docs/releases/archive/README.md).
 
-The shared request counter and pauses are client-side safeguards, not a reverse-engineered official token bucket. Auto/Conservative/Fast retain their 40/25/55 request budgets. HTTP 429 cooldowns and the 45-second recovery pacing remain unchanged. Uninstalling or clearing storage loses these local states too.
-
-## Privacy and limitations
-
-The saved index uses message/conversation identifiers, timestamps, model/effort, coverage/checkpoints, settings and diagnostics. The normal capture pipeline does not persist chat bodies or authentication tokens. Backups contain account-scoped metadata and should be treated as private files. Import only backups you trust, for the same ChatGPT account.
-
-Archived chats are included. Deleted-before-capture, temporary or otherwise missing replies cannot be reconstructed. Retaining a recorded reply after its conversation was deleted is intentional for observed historical usage. Saved replies do not necessarily correspond one-to-one to provider billing or message-limit events.
-
-## Repository and release history
-
-- Current release: [RELEASE_NOTES_1.9.0.md](RELEASE_NOTES_1.9.0.md)
-- Older release notes: [archive/release-notes](archive/release-notes/README.md)
-- Source/preservation review: [docs/REVIEW_1.9.0.md](docs/REVIEW_1.9.0.md)
-- Prior shipped-source fingerprint: [docs/BASELINE_1.8.5.json](docs/BASELINE_1.8.5.json)
-
-The prior `main` was still at 1.7.3 when this release was prepared. 1.9.0 is based on the hash-verified **distributed 1.8.5 ZIP**, not that outdated runtime. Historical notes are retained verbatim and are not retroactive assertions that every old Git publishing attempt succeeded.
-
-## Testing and packaging
-
-Requirements: Python 3.10+, Node 22+, Pillow, Playwright Python and Chromium (`/usr/bin/chromium` in the current harness).
+## Development
 
 ```bash
+python -m pip install -r requirements-dev.txt
+python -m playwright install chromium
 python tools/test.py
 python tools/package.py
 ```
 
-The suites cover the preserved features plus separate metadata disclosure and returning-index states. HTTP, storage and Web Locks are mocked in browser integration tests. Extension-ID derivation is checked statically; this environment blocks native extension pages, so native Chrome upgrade retention and Orion/iPad are not certified.
-
-`tools/package.py` validates JavaScript, referenced files, PNGs, stable identity and unchanged 1.8.5 functional modules; it creates a deterministic ZIP under `dist/` with `BUILD.json` hashes. No private signing key is bundled.
+The current suite executes production service-worker code against simulated extension APIs/backend responses and renders the actual popup UI in Chromium at 500px. Native extension installation, real authenticated ChatGPT endpoints and Orion/iPad remain manual validation boundaries. See [docs/TESTING.md](docs/TESTING.md).

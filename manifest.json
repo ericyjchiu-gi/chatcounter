@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Message Meter",
-  "version": "1.9.0",
-  "description": "Private local ChatGPT usage analytics with onboarding, plan-aware Advanced Chat limits, progressive coverage, adaptive pacing, portable index backups and bilingual light/dark UI.",
+  "version": "2.0.1",
+  "description": "ChatGPT saved-history usage estimates with a native toolbar popup, background reconciliation, local index backups and readable quota badges.",
   "permissions": [
-    "storage"
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"
@@ -15,35 +16,49 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "bridge.js"
+        "src/shared/webext.js",
+        "src/content/bridge.js",
+        "src/shared/core.js",
+        "src/shared/i18n.js",
+        "src/shared/limits.js",
+        "src/shared/tasks.js",
+        "src/shared/policy.js",
+        "src/content/view-client.js",
+        "src/content/ui.js"
       ],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "world": "ISOLATED"
     },
     {
       "matches": [
         "https://chatgpt.com/*"
       ],
       "js": [
-        "core.js",
-        "i18n.js",
-        "limits.js",
-        "api.js",
-        "tasks.js",
-        "policy.js",
-        "sync.js",
-        "live.js",
-        "ui.js"
+        "src/content/live.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
     }
   ],
   "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
   },
-  "version_name": "1.9.0",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApfIVqhvNoTN+ObTdFmPB3GHS0rHYgbRPU770Wpr2Pqp1H8uWLGlaUbE62/jJA/GEz66AmYuKWjSOHq8YUjpHKcHXGDCbD1QaNLmqkujhp+WWROGgHLnCmwZbA0QjTKoneoxD7mijhB92RS0AVASsyK9KWPjLG+s2Vl2QRgs9WdgIBMkcy/zF05utE7KK+t1K0gr3T0mzMy+EkZMsZAcA8AvIZQwonnS2WVUdWlm3gaX1JrESQe/QYZs7WrvkdyoLVk9VV/BrfyDSwaQbtBcRM09rKUdjZ/Su6gnRCMCVdmwHF8NShdl0OvupmsZWRj6D00K7de5hvbRVrOSxbebnyQIDAQAB"
+  "version_name": "2.0.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApfIVqhvNoTN+ObTdFmPB3GHS0rHYgbRPU770Wpr2Pqp1H8uWLGlaUbE62/jJA/GEz66AmYuKWjSOHq8YUjpHKcHXGDCbD1QaNLmqkujhp+WWROGgHLnCmwZbA0QjTKoneoxD7mijhB92RS0AVASsyK9KWPjLG+s2Vl2QRgs9WdgIBMkcy/zF05utE7KK+t1K0gr3T0mzMy+EkZMsZAcA8AvIZQwonnS2WVUdWlm3gaX1JrESQe/QYZs7WrvkdyoLVk9VV/BrfyDSwaQbtBcRM09rKUdjZ/Su6gnRCMCVdmwHF8NShdl0OvupmsZWRj6D00K7de5hvbRVrOSxbebnyQIDAQAB",
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "ChatGPT Message Meter",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    }
+  }
 }
